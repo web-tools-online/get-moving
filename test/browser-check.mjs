@@ -207,6 +207,38 @@ async function main() {
     );
   });
 
+  check('the title keeps moving when the page\'s own timers are throttled', async () => {
+    // A hidden tab has its own timers clamped to one a second, and to one a
+    // minute once it has been hidden for five. That cannot be reproduced from
+    // here, so the clamp is applied by hand: if the title still moves, its beat
+    // is coming from somewhere the throttling does not reach.
+    const throttled = await browser.newContext();
+    await throttled.grantPermissions(['notifications'], { origin: ORIGIN });
+    await throttled.addInitScript(NOTIFICATION_SPY);
+    await throttled.addInitScript(`
+      const real = window.setInterval.bind(window);
+      window.setInterval = (fn, ms, ...rest) => real(fn, Math.max(Number(ms) || 0, 60000), ...rest);
+    `);
+
+    const slowed = await throttled.newPage();
+    await slowed.goto(ORIGIN, { waitUntil: 'load' });
+    await slowed.click('#btn-start');
+    await slowed.evaluate(() => {
+      window.__moves = 0;
+      new MutationObserver(() => {
+        window.__moves += 1;
+      }).observe(document.querySelector('title'), { childList: true, subtree: true, characterData: true });
+      window.__getMoving.state.nextDueAt = Date.now() - 1000;
+      window.__getMoving.tick();
+    });
+
+    await slowed.waitForTimeout(3000);
+    const moves = await slowed.evaluate(() => window.__moves);
+    await throttled.close();
+    // ~15 at the 200 ms beat; a title driven by the page's own timer scores 1.
+    assert.ok(moves > 5, `the title scrolled on despite the clamp, saw ${moves} moves in 3 s`);
+  });
+
   check('acknowledging restarts the clock at a full interval', async () => {
     const acknowledgedAt = Date.now();
     await page.click('#overlay-walking');

@@ -63,7 +63,9 @@ is driven by a timer inside a worker, which is not clamped, and while a nudge is
 unacknowledged the page holds the near-silent keep-alive tone open whatever
 **Keep timers precise** is set to — an audible tab is one the browser will not
 freeze. The speaker icon appears on the tab for as long as the nudge is up and
-goes away when you acknowledge it.
+goes away when you acknowledge it. Where a worker cannot start at all — opened
+from `file://`, say — the scroll falls back to the page's own timer, which works
+but crawls in a background tab.
 
 If your system asks for *reduce motion*, the title scrolls a character a second
 instead of five — slower, but still moving, since a still title is the thing

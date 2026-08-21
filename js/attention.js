@@ -59,17 +59,34 @@ function prefersReducedMotion() {
  * `setInterval` is. Returns the function that stops it.
  */
 function startTicker(onTick) {
+  // The page's own timer: throttled in a hidden tab, but better than a title that
+  // has stopped moving altogether.
+  let fallbackId = null;
+  let stopped = false;
+  const useOwnTimer = () => {
+    if (stopped || fallbackId !== null) return;
+    fallbackId = setInterval(onTick, TICK_MS);
+  };
+
+  let worker = null;
   try {
-    const worker = new Worker(new URL('./marquee-worker.js', import.meta.url));
+    worker = new Worker(new URL('./marquee-worker.js', import.meta.url));
     worker.addEventListener('message', onTick);
+    // A worker that cannot be fetched fails asynchronously, long after the
+    // constructor returned happily, so the error event is the only thing standing
+    // between a missing file and a title that scrolls one frame and stops.
+    worker.addEventListener('error', useOwnTimer);
     worker.postMessage({ everyMs: TICK_MS });
-    return () => worker.terminate();
   } catch {
-    // No workers here (opened from file://, or blocked by policy). The page's own
-    // timer still scrolls the title; it just crawls once the tab is hidden.
-    const id = setInterval(onTick, TICK_MS);
-    return () => clearInterval(id);
+    // Workers are unavailable outright: opened from file://, or blocked by policy.
+    useOwnTimer();
   }
+
+  return () => {
+    stopped = true;
+    worker?.terminate();
+    if (fallbackId !== null) clearInterval(fallbackId);
+  };
 }
 
 /**
