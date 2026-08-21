@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get Moving</title>
+<meta name="description" content="A deliberately annoying reminder to get off the chair and onto the walking pad.">
+<meta name="theme-color" content="#e4572e">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-phase="idle">
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<main class="page">
+
+  <header class="page__head">
+    <h1 class="page__title">Get&nbsp;Moving</h1>
+    <p class="page__sub">Sit, get nagged, walk. Repeat.</p>
+  </header>
+
+  <section class="card card--status" aria-live="polite">
+    <p id="status-label" class="status__label">Not running</p>
+    <p id="countdown" class="status__countdown">—</p>
+    <p id="status-note" class="status__note">Press start, then leave this tab open in the background.</p>
+
+    <div class="progress" role="presentation">
+      <div id="progress-bar" class="progress__bar"></div>
+    </div>
+
+    <div class="actions">
+      <button id="btn-start" class="btn btn--primary" type="button">Start</button>
+      <button id="btn-walking" class="btn btn--primary" type="button" hidden>I'm walking 🚶</button>
+      <button id="btn-snooze" class="btn" type="button" hidden>Snooze</button>
+      <button id="btn-pause" class="btn btn--quiet" type="button" hidden>Pause</button>
+      <button id="btn-reset" class="btn btn--quiet" type="button" hidden>Reset</button>
+    </div>
+
+    <p id="permission-note" class="note note--warn" hidden></p>
+
+    <p id="walk-banner" class="note note--walk" hidden>
+      On the pad — <strong id="walk-remaining">0:00</strong> to go before you may sit down.
+    </p>
+  </section>
+
+  <section class="card card--stats">
+    <h2 class="card__title">Today</h2>
+    <p class="stats">
+      <strong id="today-walks">0</strong> walks ·
+      <strong id="today-minutes">0</strong> minutes
+    </p>
+    <div id="day-strip" class="strip" aria-label="Walking minutes over the last seven days"></div>
+  </section>
+
+  <section class="card">
+    <h2 class="card__title">Settings</h2>
+    <form id="settings-form" class="settings">
+
+      <label class="field">
+        <span class="field__label">Nudge me every</span>
+        <span class="field__control">
+          <input type="number" name="intervalMinutes" min="1" max="1440" step="1" inputmode="numeric">
+          <span class="field__unit">min</span>
+        </span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Walk for</span>
+        <span class="field__control">
+          <input type="number" name="walkMinutes" min="1" max="720" step="1" inputmode="numeric">
+          <span class="field__unit">min</span>
+        </span>
+        <span class="field__hint">Used for the “you can sit down now” cue and the daily tally. The next nudge is always one full interval after you start walking.</span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Annoyance</span>
+        <span class="field__control">
+          <select name="annoyance">
+            <option value="gentle">Gentle</option>
+            <option value="nagging">Nagging</option>
+            <option value="infuriating">Infuriating</option>
+          </select>
+        </span>
+        <span id="annoyance-blurb" class="field__hint"></span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Volume</span>
+        <span class="field__control">
+          <input type="range" name="volume" min="0" max="1" step="0.05">
+        </span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Snooze for</span>
+        <span class="field__control">
+          <input type="number" name="snoozeMinutes" min="1" max="120" step="1" inputmode="numeric">
+          <span class="field__unit">min</span>
+        </span>
+      </label>
+
+      <label class="field field--check">
+        <input type="checkbox" name="sitNudgeEnabled">
+        <span>Tell me when I may sit down again</span>
+      </label>
+
+      <label class="field field--check">
+        <input type="checkbox" name="quietHoursEnabled">
+        <span>Quiet hours</span>
+      </label>
+
+      <div id="quiet-fields" class="field field--times" hidden>
+        <label><span class="field__label">From</span><input type="time" name="quietFrom"></label>
+        <label><span class="field__label">To</span><input type="time" name="quietTo"></label>
+      </div>
+
+      <label class="field field--check">
+        <input type="checkbox" name="preciseTimers">
+        <span>Keep timers precise in background tabs
+          <span class="field__hint">Plays an inaudible tone so the browser stops throttling this tab. Adds a speaker icon to the tab.</span>
+        </span>
+      </label>
+
+    </form>
+  </section>
+
+  <footer class="page__foot">
+    <p><strong>This tab has to stay open.</strong> GitHub Pages is a static host, so there is no server to push a notification from — the countdown lives in this page. Leave it in a background tab, or install it as an app so it gets its own window.</p>
+  </footer>
+
+</main>
+
+<div id="overlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="overlay-headline" hidden>
+  <div class="overlay__panel">
+    <p class="overlay__kicker">Get Moving</p>
+    <h2 id="overlay-headline" class="overlay__headline">Time to walk</h2>
+    <p id="overlay-sub" class="overlay__sub"></p>
+    <div class="overlay__actions">
+      <button id="overlay-walking" class="btn btn--primary btn--large" type="button">I'm walking 🚶</button>
+      <button id="overlay-snooze" class="btn btn--quiet" type="button">Snooze</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
