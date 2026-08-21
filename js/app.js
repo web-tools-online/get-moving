@@ -50,7 +50,7 @@ function cacheElements() {
   [
     'status-label', 'countdown', 'status-note', 'progress-bar',
     'btn-start', 'btn-walking', 'btn-snooze', 'btn-pause', 'btn-reset',
-    'permission-note', 'walk-banner', 'walk-remaining',
+    'permission-note', 'audio-note', 'walk-banner', 'walk-remaining',
     'today-walks', 'today-minutes', 'day-strip',
     'settings-form', 'annoyance-blurb', 'quiet-fields',
     'volume-readout', 'btn-test-sound', 'sound-test-hint',
@@ -80,6 +80,46 @@ function toast(message) {
   toastTimer = setTimeout(() => {
     ui.toast.hidden = true;
   }, 4000);
+}
+
+/**
+ * A toast cannot survive the reload that follows an acknowledgement, so its text is
+ * parked for the fresh document to pick up. sessionStorage rather than localStorage:
+ * the message belongs to this tab and this session, and must not resurface tomorrow.
+ */
+const PENDING_TOAST_KEY = 'get-moving:pending-toast';
+
+function stashToast(message) {
+  try {
+    sessionStorage.setItem(PENDING_TOAST_KEY, message);
+  } catch {
+    /* storage disabled — the message is simply lost, which costs nothing */
+  }
+}
+
+function takeStashedToast() {
+  try {
+    const message = sessionStorage.getItem(PENDING_TOAST_KEY);
+    sessionStorage.removeItem(PENDING_TOAST_KEY);
+    return message;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Start the page over once a nudge has been answered. The schedule lives in
+ * localStorage and is written before this runs, so the new document picks the
+ * countdown straight back up; what it does not pick back up is anything the nudge
+ * left behind — a title mid-flash, an overlay mid-fade, a chime still ramping, or a
+ * document that has been sitting in a background tab since Tuesday.
+ */
+async function refresh(message) {
+  if (message) stashToast(message);
+  // Closing the tray notification is asynchronous; reloading first would abandon it
+  // half-done and leave a sticky nudge sitting there after it had been answered.
+  await notify.clearNudges();
+  window.location.reload();
 }
 
 /* ------------------------------------------------------- state transitions */
@@ -135,11 +175,12 @@ function acknowledgeWalk() {
   render();
 }
 
+/** Returns the plan that was applied, or null when the ration was already spent. */
 function snooze() {
   const plan = planSnooze(Date.now(), settings, profile(), state.snoozesUsed);
   if (!plan.allowed) {
     toast('No snoozes left this round. Get up.');
-    return;
+    return null;
   }
   state.phase = 'waiting';
   state.nextDueAt = plan.until;
@@ -150,8 +191,24 @@ function snooze() {
 
   stopNagging();
   notify.clearNudges();
-  toast(`Snoozed for ${plan.minutes} min.`);
   render();
+  return plan;
+}
+
+/*
+ * The click-facing pair. Answering a nudge — from the card, the overlay or the
+ * notification's own buttons — restarts the document as well as the clock; a
+ * refused snooze leaves the page alone, since the nudge is still going.
+ */
+
+function walkAndRefresh() {
+  acknowledgeWalk();
+  refresh();
+}
+
+function snoozeAndRefresh() {
+  const plan = snooze();
+  if (plan) refresh(`Snoozed for ${plan.minutes} min.`);
 }
 
 function togglePause() {
@@ -367,6 +424,8 @@ function render() {
     ui['walk-banner'].hidden = true;
   }
 
+  renderAudioNote();
+
   const today = statsForDay(state.stats, now);
   ui['today-walks'].textContent = String(today.walks);
   ui['today-minutes'].textContent = String(today.minutes);
@@ -390,6 +449,16 @@ function renderStrip(now) {
     column.append(bar, label);
     ui['day-strip'].append(column);
   }
+}
+
+/**
+ * A document that was reloaded rather than clicked into life has no user gesture
+ * behind it, so WebAudio stays suspended: notifications and the takeover still
+ * work, the chime does not. Silence is the one failure this app cannot afford, so
+ * it says so until any click revives the context.
+ */
+function renderAudioNote() {
+  ui['audio-note'].hidden = state.phase === 'idle' || alarm.isUnlocked();
 }
 
 function renderPermissionNote(result = notify.permission()) {
@@ -482,13 +551,13 @@ function applyKeepAlive() {
 
 function bindEvents() {
   ui['btn-start'].addEventListener('click', start);
-  ui['btn-walking'].addEventListener('click', acknowledgeWalk);
-  ui['btn-snooze'].addEventListener('click', snooze);
+  ui['btn-walking'].addEventListener('click', walkAndRefresh);
+  ui['btn-snooze'].addEventListener('click', snoozeAndRefresh);
   ui['btn-pause'].addEventListener('click', togglePause);
   ui['btn-reset'].addEventListener('click', resetSchedule);
   ui['btn-test-sound'].addEventListener('click', testSound);
-  ui['overlay-walking'].addEventListener('click', acknowledgeWalk);
-  ui['overlay-snooze'].addEventListener('click', snooze);
+  ui['overlay-walking'].addEventListener('click', walkAndRefresh);
+  ui['overlay-snooze'].addEventListener('click', snoozeAndRefresh);
 
   ui['settings-form'].addEventListener('change', onSettingsChanged);
   ui['settings-form'].addEventListener('input', (event) => {
@@ -507,8 +576,8 @@ function bindEvents() {
   });
 
   notify.onAction((action) => {
-    if (action === 'walking') acknowledgeWalk();
-    else if (action === 'snooze') snooze();
+    if (action === 'walking') walkAndRefresh();
+    else if (action === 'snooze') snoozeAndRefresh();
     else render();
   });
 
@@ -516,7 +585,7 @@ function bindEvents() {
   document.addEventListener(
     'pointerdown',
     () => {
-      if (state.phase !== 'idle') alarm.unlock();
+      if (state.phase !== 'idle') alarm.unlock().then(applyKeepAlive);
     },
     { passive: true },
   );
@@ -532,6 +601,15 @@ function init() {
   // A reload mid-cycle must not lose the schedule, but audio cannot restart
   // without a gesture — the next click or the overlay button restores it.
   if (state.phase === 'due') state.lastAlarmStep = -1;
+
+  // Landing here after an acknowledgement reload: the schedule survived in
+  // localStorage, the audio context did not. Resuming without a gesture only works
+  // where the browser already trusts the site (an installed app, a high engagement
+  // score); where it does not, the note and the pointerdown handler cover it.
+  if (state.phase !== 'idle') alarm.unlock().then(applyKeepAlive);
+
+  const stashed = takeStashedToast();
+  if (stashed) toast(stashed);
 
   render();
   tick();
@@ -556,4 +634,5 @@ window.__getMoving = {
   acknowledgeWalk,
   snooze,
   testSound,
+  audioUnlocked: alarm.isUnlocked,
 };

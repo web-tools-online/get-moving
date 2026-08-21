@@ -13,6 +13,14 @@ Pressing it restarts the clock, so walking time counts toward the interval:
 11:00  nudge  ...
 ```
 
+Answering a nudge — **I'm walking** or **Snooze**, from the page, the takeover or
+the notification's own buttons — reloads the page. The schedule is in
+`localStorage` and is written before the reload, so the countdown carries on
+untouched; what does not carry on is anything the nudge left behind in a document
+that may have been open for days. One caveat: a browser will not let a page that
+merely reloaded make a sound until you click it once, so until you do, the page
+says as much and nags visually and through notifications instead.
+
 No accounts, no server, no tracking. Everything lives in your browser's
 `localStorage`.
 
@@ -117,5 +125,8 @@ Some of this cannot be automated, and it is what actually matters day to day:
 - [ ] Clicking the notification focuses the tab; its **I'm walking** button
       acknowledges without you touching the page.
 - [ ] Reload mid-cycle — the countdown carries on where it was.
+- [ ] Press **I'm walking**: the page reloads and comes back mid-countdown. If the
+      "sound is asleep" note appears, one click anywhere clears it — and the next
+      nudge chimes.
 - [ ] Sleep the machine past a nudge, wake it, and confirm the clock restarts.
 - [ ] Install as an app and confirm it nags from its own window.

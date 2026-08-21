@@ -97,6 +97,13 @@ async function main() {
   const notifications = () => page.evaluate(() => window.__notifications);
   const oscillators = () => page.evaluate(() => window.__oscillators);
 
+  /** Answering a nudge reloads the page, so the click has to wait for the new load. */
+  const clickAndReload = async (selector) => {
+    const loaded = page.waitForEvent('load');
+    await page.click(selector);
+    await loaded;
+  };
+
   /** Range inputs cannot be filled, so nudge the slider the way a drag would. */
   const setVolume = (value) =>
     page.evaluate((v) => {
@@ -167,9 +174,16 @@ async function main() {
     await page.screenshot({ path: join(shots, '03-due-overlay.png'), fullPage: true });
   });
 
-  check('acknowledging restarts the clock at a full interval', async () => {
+  check('acknowledging restarts the clock at a full interval, and the page with it', async () => {
     const acknowledgedAt = Date.now();
-    await page.click('#overlay-walking');
+    // Survives only in this document, so its absence afterwards proves the reload.
+    await page.evaluate(() => {
+      window.__beforeAcknowledge = true;
+    });
+
+    await clickAndReload('#overlay-walking');
+
+    assert.equal(await page.evaluate(() => window.__beforeAcknowledge), undefined, 'the page reloaded');
     const after = await state();
     assert.equal(after.phase, 'waiting');
     assert.ok(Math.abs(after.nextDueAt - (acknowledgedAt + 60 * MINUTE)) < 5000, 'next nudge is one interval after the walk started');
@@ -199,12 +213,25 @@ async function main() {
     // The overlay covers the card while a nudge is up, so snooze from the overlay.
     await page.waitForSelector('#overlay:not([hidden])');
     const snoozedAt = Date.now();
-    await page.click('#overlay-snooze');
+    await clickAndReload('#overlay-snooze');
     const after = await state();
     assert.equal(after.phase, 'waiting');
     assert.ok(Math.abs(after.nextDueAt - (snoozedAt + 5 * MINUTE)) < 5000, 'snoozed five minutes');
     assert.equal(after.snoozesUsed, 1);
     await expectVisibleText('#today-walks', '1', 'a snooze is not a walk');
+    await expectVisibleText('#toast', 'Snoozed for 5 min', 'the confirmation was carried across the reload');
+  });
+
+  check('the reloaded page says so when the chime cannot sound', async () => {
+    // A reload drops the audio context, and only a trusted origin gets it back
+    // without a click — which is exactly what the note is there to tell you. This
+    // browser is launched with the autoplay policy relaxed, so assert the pairing
+    // rather than either half of it.
+    const [unlocked, hidden] = await page.evaluate(() => [
+      window.__getMoving.audioUnlocked(),
+      document.getElementById('audio-note').hidden,
+    ]);
+    assert.equal(hidden, unlocked, 'the note shows exactly while the audio context is asleep');
   });
 
   check('changing the interval re-anchors the pending nudge', async () => {
