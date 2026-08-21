@@ -38,12 +38,21 @@ export async function unlock() {
   return ctx.state === 'running';
 }
 
+/** How long one chime lasts, so a caller can wait for it to finish. */
+export function patternDurationMs(level) {
+  const pattern = PATTERNS[level] ?? PATTERNS.nagging;
+  const step = pattern.noteMs + pattern.gapMs;
+  return (pattern.notes.length - 1) * step + pattern.noteMs + pattern.release * 1000;
+}
+
 /**
  * Play one alarm. `level` picks the timbre, `volume` is 0..1 and already carries
- * any escalation ramp from `volumeForStep`.
+ * any escalation ramp from `volumeForStep`. Returns false when nothing was
+ * scheduled — a locked context or a volume of zero — which is what lets the
+ * volume test tell the user why the page stayed silent.
  */
 export function play(level, volume) {
-  if (!ctx || ctx.state !== 'running' || volume <= 0) return;
+  if (!ctx || ctx.state !== 'running' || volume <= 0) return false;
   const pattern = PATTERNS[level] ?? PATTERNS.nagging;
   const step = (pattern.noteMs + pattern.gapMs) / 1000;
   const peak = Math.min(1, volume) * 0.35; // 0.35 keeps a full-volume square wave short of clipping
@@ -66,6 +75,8 @@ export function play(level, volume) {
     osc.start(startAt);
     osc.stop(endAt + pattern.release + 0.02);
   });
+
+  return true;
 }
 
 /** A distinct, friendlier two-note motif for "you can sit down now". */

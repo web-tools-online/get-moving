@@ -55,6 +55,19 @@ const NOTIFICATION_SPY = `
   window.Notification = SpyNotification;
 `;
 
+/** Counts every oscillator the page schedules, which is how "did it play" is checked. */
+const AUDIO_SPY = `
+  window.__oscillators = 0;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (Ctx) {
+    const original = Ctx.prototype.createOscillator;
+    Ctx.prototype.createOscillator = function (...args) {
+      window.__oscillators += 1;
+      return original.apply(this, args);
+    };
+  }
+`;
+
 async function main() {
   await waitForServer();
 
@@ -62,6 +75,7 @@ async function main() {
   const context = await browser.newContext();
   await context.grantPermissions(['notifications'], { origin: ORIGIN });
   await context.addInitScript(NOTIFICATION_SPY);
+  await context.addInitScript(AUDIO_SPY);
 
   const page = await context.newPage();
   const errors = [];
@@ -81,11 +95,51 @@ async function main() {
 
   const state = () => page.evaluate(() => JSON.parse(JSON.stringify(window.__getMoving.state)));
   const notifications = () => page.evaluate(() => window.__notifications);
+  const oscillators = () => page.evaluate(() => window.__oscillators);
+
+  /** Range inputs cannot be filled, so nudge the slider the way a drag would. */
+  const setVolume = (value) =>
+    page.evaluate((v) => {
+      const input = document.querySelector('input[name="volume"]');
+      input.value = String(v);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }, value);
 
   check('the page loads in the idle phase', async () => {
     assert.equal(await page.getAttribute('body', 'data-phase'), 'idle');
     await expectVisibleText('#status-label', 'Not running');
     await page.screenshot({ path: join(shots, '01-idle.png'), fullPage: true });
+  });
+
+  check('the volume can be tested before the timer is ever started', async () => {
+    await expectVisibleText('#volume-readout', '60%');
+
+    await page.evaluate(() => {
+      window.__oscillators = 0;
+    });
+    await page.click('#btn-test-sound');
+    await page.waitForFunction(() => window.__oscillators > 0);
+
+    await expectVisibleText('#sound-test-hint', 'Nagging');
+    await expectVisibleText('#sound-test-hint', '60%');
+    assert.equal((await state()).phase, 'idle', 'testing the sound must not start the schedule');
+    assert.deepEqual(await notifications(), [], 'a test is not a nudge');
+
+    // The button locks itself for the length of the chime, then comes back.
+    await page.waitForSelector('#btn-test-sound:not([disabled])');
+  });
+
+  check('a muted slider says so instead of playing nothing in silence', async () => {
+    await setVolume(0);
+    await expectVisibleText('#volume-readout', '0%');
+    const before = await oscillators();
+    await page.click('#btn-test-sound');
+    await expectVisibleText('#sound-test-hint', 'Volume is at zero');
+    assert.equal(await oscillators(), before, 'nothing was played at zero volume');
+
+    await setVolume(0.6);
+    await expectVisibleText('#sound-test-hint', 'Plays the chime', 'the stale result cleared');
+    await page.screenshot({ path: join(shots, '01b-volume-test.png'), fullPage: true });
   });
 
   check('start schedules the first nudge one interval out', async () => {
