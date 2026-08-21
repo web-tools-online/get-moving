@@ -1,0 +1,495 @@
+/**
+ * Wiring: the tick loop, the state machine, and the UI bindings.
+ *
+ * The loop is deliberately timestamp-driven rather than countdown-driven. A hidden
+ * tab has its timers clamped to roughly once a minute, so anything that counted
+ * down by subtracting 1000 ms per tick would drift badly. Comparing `Date.now()`
+ * against a stored `nextDueAt` means throttling costs lateness, never a miss.
+ */
+
+import {
+  MINUTE,
+  nextDueFrom,
+  effectiveDueAt,
+  escalationStep,
+  volumeForStep,
+  planSnooze,
+  addWalk,
+  statsForDay,
+  recentDays,
+  formatDuration,
+  formatApprox,
+  isMissed,
+  applyQuietHours,
+} from './scheduler.js';
+
+import {
+  INITIAL_STATE,
+  loadSettings,
+  saveSettings,
+  loadState,
+  saveState,
+  normalizeSettings,
+  profileFor,
+} from './settings.js';
+
+import * as alarm from './alarm.js';
+import * as notify from './notify.js';
+import * as attention from './attention.js';
+
+const TICK_MS = 1000;
+
+let settings = loadSettings();
+let state = loadState();
+
+const el = (id) => document.getElementById(id);
+
+const ui = {};
+
+function cacheElements() {
+  [
+    'status-label', 'countdown', 'status-note', 'progress-bar',
+    'btn-start', 'btn-walking', 'btn-snooze', 'btn-pause', 'btn-reset',
+    'permission-note', 'walk-banner', 'walk-remaining',
+    'today-walks', 'today-minutes', 'day-strip',
+    'settings-form', 'annoyance-blurb', 'quiet-fields',
+    'overlay', 'overlay-walking', 'overlay-snooze', 'toast',
+  ].forEach((id) => {
+    ui[id] = el(id);
+  });
+}
+
+/* ------------------------------------------------------------------ helpers */
+
+function persist() {
+  saveState(state);
+}
+
+function profile() {
+  return profileFor(settings);
+}
+
+let toastTimer = null;
+function toast(message) {
+  if (!ui.toast) return;
+  ui.toast.textContent = message;
+  ui.toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    ui.toast.hidden = true;
+  }, 4000);
+}
+
+/* ------------------------------------------------------- state transitions */
+
+async function start() {
+  // This runs from a click, which is the only moment we are allowed to unlock
+  // audio or ask for notification permission.
+  await alarm.unlock();
+  const result = await notify.requestPermission();
+  renderPermissionNote(result);
+  applyKeepAlive();
+
+  state = {
+    ...state,
+    phase: 'waiting',
+    nextDueAt: nextDueFrom(Date.now(), settings),
+    dueSince: null,
+    walkEndsAt: null,
+    snoozesUsed: 0,
+    lastAlarmStep: -1,
+  };
+  persist();
+  render();
+}
+
+function becomeDue(now) {
+  const missed = isMissed(state.nextDueAt, now, settings);
+  state.phase = 'due';
+  state.dueSince = effectiveDueAt(state.nextDueAt, now, settings);
+  state.lastAlarmStep = -1;
+  state.snoozesUsed = 0;
+  if (missed) toast('Welcome back — that nudge was overdue, so the clock restarted.');
+  persist();
+}
+
+/** The acknowledgement: "yes, I am getting up". */
+function acknowledgeWalk() {
+  const now = Date.now();
+  const walkEndsAt = now + settings.walkMinutes * MINUTE;
+  state.stats = addWalk(state.stats, now, settings.walkMinutes);
+  state.phase = 'waiting';
+  // One full interval, as agreed — except when the walk is configured longer than
+  // the interval itself, where the nudge would otherwise go off mid-walk.
+  state.nextDueAt = Math.max(nextDueFrom(now, settings), walkEndsAt);
+  state.dueSince = null;
+  state.walkEndsAt = settings.sitNudgeEnabled ? walkEndsAt : null;
+  state.snoozesUsed = 0;
+  state.lastAlarmStep = -1;
+  persist();
+
+  stopNagging();
+  notify.clearNudges();
+  render();
+}
+
+function snooze() {
+  const plan = planSnooze(Date.now(), settings, profile(), state.snoozesUsed);
+  if (!plan.allowed) {
+    toast('No snoozes left this round. Get up.');
+    return;
+  }
+  state.phase = 'waiting';
+  state.nextDueAt = plan.until;
+  state.dueSince = null;
+  state.snoozesUsed = plan.snoozesUsed;
+  state.lastAlarmStep = -1;
+  persist();
+
+  stopNagging();
+  notify.clearNudges();
+  toast(`Snoozed for ${plan.minutes} min.`);
+  render();
+}
+
+function togglePause() {
+  if (state.phase === 'paused') {
+    state.phase = 'waiting';
+    state.nextDueAt = nextDueFrom(Date.now(), settings);
+    state.lastAlarmStep = -1;
+  } else {
+    state.phase = 'paused';
+    state.nextDueAt = null;
+    state.dueSince = null;
+    state.walkEndsAt = null;
+    stopNagging();
+    notify.clearNudges();
+  }
+  persist();
+  render();
+}
+
+function resetSchedule() {
+  stopNagging();
+  notify.clearNudges();
+  state = { ...INITIAL_STATE, stats: state.stats };
+  persist();
+  render();
+}
+
+/* ------------------------------------------------------------- the nagging */
+
+function stopNagging() {
+  attention.stopFlash();
+  attention.hideOverlay();
+  attention.setTitleSuffix('');
+}
+
+function fireAlarm(step) {
+  const level = settings.annoyance;
+  alarm.play(level, volumeForStep(settings.volume, step, profile()));
+
+  notify.showNudge({
+    title: step === 0 ? 'Time to walk' : `Still sitting (${step + 1})`,
+    body:
+      step === 0
+        ? `Get on the walking pad for ${settings.walkMinutes} min. Next nudge ${formatApprox(settings.intervalMinutes * MINUTE)} after you start.`
+        : `You have been sitting since this nudge started. ${settings.walkMinutes} min on the pad, that is all.`,
+    requireInteraction: profile().requireInteraction,
+    renotify: profile().renotify,
+  });
+}
+
+function nagVisuals() {
+  const current = profile();
+  if (current.flashTitle) {
+    attention.startFlash('🚶 GET UP');
+  } else {
+    attention.setTitleSuffix('Time to walk');
+  }
+  if (document.visibilityState === 'visible' && !attention.isOverlayVisible()) {
+    attention.showOverlay({
+      mode: current.overlay,
+      headline: 'Time to walk',
+      sub: `${settings.walkMinutes} minutes on the pad. The clock restarts when you start.`,
+      lockSeconds: current.overlay === 'blocking' ? 5 : 0,
+    });
+  }
+}
+
+/* -------------------------------------------------------------- tick + render */
+
+function tick() {
+  const now = Date.now();
+
+  if (state.walkEndsAt && now >= state.walkEndsAt) {
+    state.walkEndsAt = null;
+    persist();
+    if (settings.sitNudgeEnabled) {
+      alarm.playSitCue(settings.volume);
+      notify.showNudge({
+        title: 'You can sit down now',
+        body: `That is ${settings.walkMinutes} min done. Next nudge at ${clockTime(state.nextDueAt)}.`,
+        tag: 'get-moving-sit',
+        actions: false,
+      });
+    }
+  }
+
+  if (state.phase === 'waiting' && state.nextDueAt !== null && now >= state.nextDueAt) {
+    becomeDue(now);
+  }
+
+  if (state.phase === 'due') {
+    const step = escalationStep(state.dueSince, now, profile());
+    if (step > state.lastAlarmStep) {
+      state.lastAlarmStep = step;
+      persist();
+      fireAlarm(step);
+    }
+    nagVisuals();
+  }
+
+  render();
+}
+
+function clockTime(ts) {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function render() {
+  const now = Date.now();
+  const isDue = state.phase === 'due';
+
+  document.body.dataset.phase = state.phase;
+
+  const labels = {
+    idle: 'Not running',
+    waiting: 'Next nudge in',
+    due: 'Get up — now',
+    paused: 'Paused',
+  };
+  ui['status-label'].textContent = labels[state.phase];
+
+  if (state.phase === 'waiting' && state.nextDueAt) {
+    ui.countdown.textContent = formatDuration(state.nextDueAt - now);
+    ui['status-note'].textContent = `Due at ${clockTime(state.nextDueAt)} · every ${settings.intervalMinutes} min`;
+  } else if (isDue) {
+    ui.countdown.textContent = `+${formatDuration(now - state.dueSince)}`;
+    ui['status-note'].textContent = 'Sitting time since the nudge. It is not going to stop on its own.';
+  } else if (state.phase === 'paused') {
+    ui.countdown.textContent = '—';
+    ui['status-note'].textContent = 'Nothing scheduled. Resume when you are back.';
+  } else {
+    ui.countdown.textContent = '—';
+    ui['status-note'].textContent = 'Press start, then leave this tab open in the background.';
+  }
+
+  // Progress across the current interval, so a glance tells you where you are.
+  let progress = 0;
+  if (state.phase === 'waiting' && state.nextDueAt) {
+    const span = settings.intervalMinutes * MINUTE;
+    progress = 1 - Math.min(1, Math.max(0, (state.nextDueAt - now) / span));
+  } else if (isDue) {
+    progress = 1;
+  }
+  ui['progress-bar'].style.width = `${(progress * 100).toFixed(1)}%`;
+
+  ui['btn-start'].hidden = state.phase !== 'idle';
+  ui['btn-walking'].hidden = state.phase === 'idle' || state.phase === 'paused';
+  ui['btn-snooze'].hidden = !isDue;
+  ui['btn-pause'].hidden = state.phase === 'idle';
+  ui['btn-pause'].textContent = state.phase === 'paused' ? 'Resume' : 'Pause';
+  ui['btn-reset'].hidden = state.phase === 'idle';
+  ui['btn-walking'].textContent = isDue ? "I'm walking 🚶" : 'Walk now (restart the clock)';
+
+  if (state.walkEndsAt) {
+    ui['walk-banner'].hidden = false;
+    ui['walk-remaining'].textContent = formatDuration(state.walkEndsAt - now);
+  } else {
+    ui['walk-banner'].hidden = true;
+  }
+
+  const today = statsForDay(state.stats, now);
+  ui['today-walks'].textContent = String(today.walks);
+  ui['today-minutes'].textContent = String(today.minutes);
+  renderStrip(now);
+}
+
+function renderStrip(now) {
+  const days = recentDays(state.stats, now, 7);
+  const peak = Math.max(30, ...days.map((day) => day.minutes));
+  ui['day-strip'].innerHTML = '';
+  for (const day of days) {
+    const column = document.createElement('div');
+    column.className = 'strip__col';
+    column.title = `${day.key}: ${day.minutes} min over ${day.walks} walk(s)`;
+    const bar = document.createElement('div');
+    bar.className = 'strip__bar';
+    bar.style.height = `${Math.max(3, (day.minutes / peak) * 100)}%`;
+    const label = document.createElement('span');
+    label.className = 'strip__label';
+    label.textContent = new Date(`${day.key}T00:00`).toLocaleDateString([], { weekday: 'narrow' });
+    column.append(bar, label);
+    ui['day-strip'].append(column);
+  }
+}
+
+function renderPermissionNote(result = notify.permission()) {
+  const notes = {
+    granted: '',
+    denied: 'Notifications are blocked for this site, so nudges will only appear in the tab itself. Re-enable them in the padlock menu in the address bar.',
+    default: 'Notifications are not enabled yet — press start to allow them.',
+    unsupported: 'This browser has no Notification API, so nudges stay inside the tab.',
+  };
+  const message = notes[result] ?? '';
+  ui['permission-note'].textContent = message;
+  ui['permission-note'].hidden = !message;
+}
+
+/* --------------------------------------------------------------- settings UI */
+
+function fillSettingsForm() {
+  const form = ui['settings-form'];
+  form.intervalMinutes.value = settings.intervalMinutes;
+  form.walkMinutes.value = settings.walkMinutes;
+  form.annoyance.value = settings.annoyance;
+  form.volume.value = settings.volume;
+  form.snoozeMinutes.value = settings.snoozeMinutes;
+  form.quietHoursEnabled.checked = settings.quietHoursEnabled;
+  form.quietFrom.value = settings.quietFrom;
+  form.quietTo.value = settings.quietTo;
+  form.sitNudgeEnabled.checked = settings.sitNudgeEnabled;
+  form.preciseTimers.checked = settings.preciseTimers;
+  ui['annoyance-blurb'].textContent = profile().blurb;
+  ui['quiet-fields'].hidden = !settings.quietHoursEnabled;
+}
+
+function readSettingsForm() {
+  const form = ui['settings-form'];
+  return normalizeSettings({
+    intervalMinutes: Number(form.intervalMinutes.value),
+    walkMinutes: Number(form.walkMinutes.value),
+    annoyance: form.annoyance.value,
+    volume: Number(form.volume.value),
+    snoozeMinutes: Number(form.snoozeMinutes.value),
+    quietHoursEnabled: form.quietHoursEnabled.checked,
+    quietFrom: form.quietFrom.value,
+    quietTo: form.quietTo.value,
+    sitNudgeEnabled: form.sitNudgeEnabled.checked,
+    preciseTimers: form.preciseTimers.checked,
+  });
+}
+
+function onSettingsChanged() {
+  const previous = settings;
+  settings = readSettingsForm();
+  saveSettings(settings);
+  fillSettingsForm();
+  applyKeepAlive();
+
+  // A nudge already on screen must adopt the new annoyance level rather than
+  // keeping the overlay mode it was opened with.
+  if (state.phase === 'due' && settings.annoyance !== previous.annoyance) {
+    attention.stopFlash();
+    attention.hideOverlay();
+    nagVisuals();
+  }
+
+  // Re-anchor a pending nudge so an interval change takes effect immediately
+  // rather than after the current cycle finishes.
+  if (state.phase === 'waiting' && state.nextDueAt && settings.intervalMinutes !== previous.intervalMinutes) {
+    const elapsed = previous.intervalMinutes * MINUTE - (state.nextDueAt - Date.now());
+    const reanchored = Date.now() + settings.intervalMinutes * MINUTE - Math.max(0, elapsed);
+    state.nextDueAt = applyQuietHours(Math.max(Date.now(), reanchored), settings);
+    persist();
+  }
+  render();
+}
+
+function applyKeepAlive() {
+  if (settings.preciseTimers && state.phase !== 'idle') {
+    alarm.startKeepAlive();
+  } else {
+    alarm.stopKeepAlive();
+  }
+}
+
+/* ------------------------------------------------------------------- startup */
+
+function bindEvents() {
+  ui['btn-start'].addEventListener('click', start);
+  ui['btn-walking'].addEventListener('click', acknowledgeWalk);
+  ui['btn-snooze'].addEventListener('click', snooze);
+  ui['btn-pause'].addEventListener('click', togglePause);
+  ui['btn-reset'].addEventListener('click', resetSchedule);
+  ui['overlay-walking'].addEventListener('click', acknowledgeWalk);
+  ui['overlay-snooze'].addEventListener('click', snooze);
+
+  ui['settings-form'].addEventListener('change', onSettingsChanged);
+  ui['settings-form'].addEventListener('input', (event) => {
+    if (event.target.name === 'volume') onSettingsChanged();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      // Coming back to a throttled tab: catch up immediately instead of waiting
+      // for the next scheduled tick.
+      tick();
+      // Re-unlocking is free when already running, and recovers a context that
+      // the browser suspended while the tab was hidden.
+      if (state.phase !== 'idle') alarm.unlock().then(applyKeepAlive);
+    }
+  });
+
+  notify.onAction((action) => {
+    if (action === 'walking') acknowledgeWalk();
+    else if (action === 'snooze') snooze();
+    else render();
+  });
+
+  // Any click counts as the gesture that revives a suspended audio context.
+  document.addEventListener(
+    'pointerdown',
+    () => {
+      if (state.phase !== 'idle') alarm.unlock();
+    },
+    { passive: true },
+  );
+}
+
+function init() {
+  cacheElements();
+  bindEvents();
+  fillSettingsForm();
+  renderPermissionNote();
+  notify.initServiceWorker();
+
+  // A reload mid-cycle must not lose the schedule, but audio cannot restart
+  // without a gesture — the next click or the overlay button restores it.
+  if (state.phase === 'due') state.lastAlarmStep = -1;
+
+  render();
+  tick();
+  setInterval(tick, TICK_MS);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+
+// Exposed purely so the Playwright checks can drive the clock without waiting an hour.
+window.__getMoving = {
+  get state() {
+    return state;
+  },
+  get settings() {
+    return settings;
+  },
+  tick,
+  acknowledgeWalk,
+  snooze,
+};
