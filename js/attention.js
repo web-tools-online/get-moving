@@ -5,9 +5,15 @@
 
 const ORIGINAL_TITLE = document.title;
 
-let flashTimer = null;
-let flashMessage = null;
-let flashOn = false;
+/** How the nag reads in the tab: the message, the app name, and back around. */
+const MARQUEE_SEPARATOR = ' · ';
+const MARQUEE_STEP_MS = 250;
+const FAVICON_STEP_MS = 800;
+
+let titleTimer = null;
+let titleMessage = null;
+let faviconTimer = null;
+let faviconOn = false;
 let originalFavicon = null;
 let alarmFaviconUrl = null;
 
@@ -42,35 +48,71 @@ function alarmFavicon() {
   return alarmFaviconUrl;
 }
 
-/** Alternate the title (and favicon) until `stopFlash()`. */
-export function startFlash(message) {
-  if (flashTimer && flashMessage === message) return; // already flashing this
-  stopFlash();
-  flashMessage = message;
-  const link = faviconLink();
-  const tick = () => {
-    flashOn = !flashOn;
-    document.title = flashOn ? message : ORIGINAL_TITLE;
-    link.href = flashOn ? alarmFavicon() : originalFavicon;
-  };
-  tick();
-  flashTimer = setInterval(tick, 800);
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 }
 
-export function stopFlash() {
-  if (flashTimer) {
-    clearInterval(flashTimer);
-    flashTimer = null;
-  }
-  flashOn = false;
-  flashMessage = null;
+/**
+ * Scroll the nag across the tab title, one character per step. Split by code
+ * point rather than by index, or rotating past the emoji cuts it in half and
+ * leaves a stray surrogate in the title.
+ */
+function scrollTitle(message) {
+  const characters = Array.from(`${message}${MARQUEE_SEPARATOR}${ORIGINAL_TITLE}${MARQUEE_SEPARATOR}`);
+  let offset = 0;
+  const step = () => {
+    document.title = characters.slice(offset).concat(characters.slice(0, offset)).join('');
+    offset = (offset + 1) % characters.length;
+  };
+  step();
+  return setInterval(step, MARQUEE_STEP_MS);
+}
+
+/** The still version, for anyone who has asked the system for less movement. */
+function alternateTitle(message) {
+  let on = false;
+  const step = () => {
+    on = !on;
+    document.title = on ? message : ORIGINAL_TITLE;
+  };
+  step();
+  return setInterval(step, FAVICON_STEP_MS);
+}
+
+/**
+ * Put the tab itself to work: the title starts moving and the favicon turns into
+ * a red alert dot, until `stopTitleAlarm()`. A tab that is scrolling is visible
+ * out of the corner of an eye in a way a static "(1)" never is.
+ */
+export function startTitleAlarm(message) {
+  if (titleTimer && titleMessage === message) return; // already running for this message
+  stopTitleAlarm();
+  titleMessage = message;
+  titleTimer = prefersReducedMotion() ? alternateTitle(message) : scrollTitle(message);
+
+  const link = faviconLink();
+  const flip = () => {
+    faviconOn = !faviconOn;
+    link.href = faviconOn ? alarmFavicon() : originalFavicon;
+  };
+  flip();
+  faviconTimer = setInterval(flip, FAVICON_STEP_MS);
+}
+
+export function stopTitleAlarm() {
+  clearInterval(titleTimer);
+  clearInterval(faviconTimer);
+  titleTimer = null;
+  faviconTimer = null;
+  titleMessage = null;
+  faviconOn = false;
   document.title = ORIGINAL_TITLE;
   if (originalFavicon !== null) faviconLink().href = originalFavicon;
 }
 
-/** A quiet title change for levels that do not flash. */
+/** A quiet title change for levels that do not move the tab. */
 export function setTitleSuffix(suffix) {
-  if (flashTimer) return; // a flash in progress owns the title
+  if (titleTimer) return; // a running alarm owns the title
   document.title = suffix ? `${suffix} — ${ORIGINAL_TITLE}` : ORIGINAL_TITLE;
 }
 

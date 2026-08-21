@@ -24,7 +24,8 @@ export const DEFAULT_SETTINGS = {
 
 /**
  * How hard each level pushes. `maxRepeats` counts alarms including the first,
- * so "gentle" is a single chime and nothing more.
+ * so "gentle" is a single chime and nothing more. `animateTitle` is what sets the
+ * tab name scrolling while the nudge is up.
  */
 export const ANNOYANCE_PROFILES = {
   gentle: {
@@ -35,33 +36,33 @@ export const ANNOYANCE_PROFILES = {
     repeatSeconds: 0,
     maxRepeats: 1,
     volumeRamp: false,
-    flashTitle: false,
+    animateTitle: false,
     overlay: 'none',
     snoozeCapMinutes: Infinity,
     maxSnoozes: Infinity,
   },
   nagging: {
     label: 'Nagging',
-    blurb: 'Sticky notification, a chime every 30 s (ten times), flashing tab title and red icon.',
+    blurb: 'Sticky notification, a chime every 30 s (ten times), a tab title that scrolls past and a red icon.',
     requireInteraction: true,
     renotify: false,
     repeatSeconds: 30,
     maxRepeats: 10,
     volumeRamp: false,
-    flashTitle: true,
+    animateTitle: true,
     overlay: 'dismissible',
     snoozeCapMinutes: Infinity,
     maxSnoozes: Infinity,
   },
   infuriating: {
     label: 'Infuriating',
-    blurb: 'Re-fired notification and a louder chime every 15 s, forever. Blocking overlay, snooze capped at 5 min, twice per cycle.',
+    blurb: 'Re-fired notification and a louder chime every 15 s, forever. Scrolling tab title, blocking overlay, snooze capped at 5 min, twice per cycle.',
     requireInteraction: true,
     renotify: true,
     repeatSeconds: 15,
     maxRepeats: Infinity,
     volumeRamp: true,
-    flashTitle: true,
+    animateTitle: true,
     overlay: 'blocking',
     snoozeCapMinutes: 5,
     maxSnoozes: 2,

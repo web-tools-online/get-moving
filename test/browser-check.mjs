@@ -167,6 +167,25 @@ async function main() {
     await page.screenshot({ path: join(shots, '03-due-overlay.png'), fullPage: true });
   });
 
+  check('the tab name scrolls while the nudge is up', async () => {
+    const first = await page.title();
+    // Same characters, different starting point: the title is rotating, not rewritten.
+    await page.waitForFunction(
+      (before) => document.title !== before,
+      first,
+      { timeout: 5000 },
+    );
+    // The browser trims the title, so compare the characters without the spaces.
+    const letters = (title) => [...title.replace(/\s/g, '')].sort().join('');
+    const second = await page.title();
+    assert.equal(
+      letters(second),
+      letters(first),
+      `the title moved rather than changing content ("${first}" -> "${second}")`,
+    );
+    assert.ok(second.includes('Get Moving'), 'the app name travels with the nag');
+  });
+
   check('acknowledging restarts the clock at a full interval', async () => {
     const acknowledgedAt = Date.now();
     await page.click('#overlay-walking');
@@ -175,7 +194,7 @@ async function main() {
     assert.ok(Math.abs(after.nextDueAt - (acknowledgedAt + 60 * MINUTE)) < 5000, 'next nudge is one interval after the walk started');
     assert.ok(after.walkEndsAt > Date.now(), 'the sit-down cue is pending');
     assert.equal(await page.isVisible('#overlay'), false, 'the overlay is gone');
-    assert.equal(await page.evaluate(() => document.title), 'Get Moving', 'the title stopped flashing');
+    assert.equal(await page.evaluate(() => document.title), 'Get Moving', 'the title stopped moving');
   });
 
   check('the walk is counted in the daily tally', async () => {
