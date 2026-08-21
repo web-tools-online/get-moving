@@ -194,6 +194,42 @@ async function main() {
     assert.deepEqual(after.stats, before.stats, 'the stats survived the reload');
   });
 
+  check('pause holds the countdown and resume continues it', async () => {
+    // Wind the clock most of the way through the interval, so a restarted
+    // countdown is unmistakable next to a continued one.
+    await page.evaluate(() => {
+      window.__getMoving.state.nextDueAt = Date.now() + 10 * 60_000;
+      window.__getMoving.tick();
+    });
+    const before = await state();
+    await page.click('#btn-pause');
+    const paused = await state();
+    assert.equal(paused.phase, 'paused');
+    assert.ok(
+      Math.abs(paused.pausedRemainingMs - (before.nextDueAt - Date.now())) < 5000,
+      'the time left was banked, not discarded',
+    );
+    await expectVisibleText('#btn-pause', 'Resume');
+    await expectVisibleText('#status-label', 'Paused');
+    await page.screenshot({ path: join(shots, '04b-paused.png'), fullPage: true });
+
+    // A reload while paused must not quietly hand back a full interval either.
+    await page.reload({ waitUntil: 'load' });
+    assert.equal((await state()).pausedRemainingMs, paused.pausedRemainingMs, 'the banked time survived the reload');
+
+    const resumedAt = Date.now();
+    await page.click('#btn-pause');
+    const after = await state();
+    assert.equal(after.phase, 'waiting');
+    assert.equal(after.pausedRemainingMs, null);
+    assert.ok(
+      Math.abs(after.nextDueAt - (resumedAt + paused.pausedRemainingMs)) < 5000,
+      `resume continued the countdown rather than restarting it (${after.nextDueAt - resumedAt} ms left)`,
+    );
+    assert.ok(after.nextDueAt - resumedAt < 11 * MINUTE, 'a fresh 60 min interval would mean the countdown restarted');
+    assert.ok(after.walkEndsAt > Date.now(), 'the pending sit-down cue came back too');
+  });
+
   check('snoozing pushes the nudge out by the snooze length only', async () => {
     await makeDue();
     // The overlay covers the card while a nudge is up, so snooze from the overlay.

@@ -117,5 +117,7 @@ Some of this cannot be automated, and it is what actually matters day to day:
 - [ ] Clicking the notification focuses the tab; its **I'm walking** button
       acknowledges without you touching the page.
 - [ ] Reload mid-cycle — the countdown carries on where it was.
+- [ ] Pause, wait a while, resume — the countdown continues from where it was
+      paused rather than starting a fresh interval.
 - [ ] Sleep the machine past a nudge, wake it, and confirm the clock restarts.
 - [ ] Install as an app and confirm it nags from its own window.

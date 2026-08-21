@@ -56,6 +56,38 @@ export function nextDueFrom(fromMs, settings) {
 }
 
 /**
+ * Freeze a running schedule. Pausing keeps what is left of the interval (and of
+ * the current walk) rather than throwing it away, so resuming continues the
+ * countdown instead of starting a fresh one. A nudge that was already due has
+ * nothing left to wait for, hence zero.
+ */
+export function planPause(state, nowMs) {
+  const left = (ts) => (Number.isFinite(ts) ? Math.max(0, ts - nowMs) : null);
+  return {
+    pausedRemainingMs: state.phase === 'due' ? 0 : left(state.nextDueAt),
+    pausedWalkRemainingMs: left(state.walkEndsAt),
+  };
+}
+
+/**
+ * Thaw a paused schedule: the banked time is re-based onto `nowMs`. When nothing
+ * was banked — state written before pausing learned to keep the remainder — it
+ * falls back to a whole interval, which is the old behaviour.
+ */
+export function planResume(state, nowMs, settings) {
+  const remaining = Number.isFinite(state.pausedRemainingMs)
+    ? Math.max(0, state.pausedRemainingMs)
+    : settings.intervalMinutes * MINUTE;
+  const walkRemaining = Number.isFinite(state.pausedWalkRemainingMs)
+    ? Math.max(0, state.pausedWalkRemainingMs)
+    : 0;
+  return {
+    nextDueAt: applyQuietHours(nowMs + remaining, settings),
+    walkEndsAt: walkRemaining > 0 ? nowMs + walkRemaining : null,
+  };
+}
+
+/**
  * How late a nudge has to be before we assume the machine was asleep. Past this
  * point we re-anchor to "now" rather than pretending it has been screaming for
  * six hours.

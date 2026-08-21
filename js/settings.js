@@ -126,6 +126,10 @@ export const INITIAL_STATE = {
   nextDueAt: null,
   dueSince: null, // when the current nudge became due, after miss re-anchoring
   walkEndsAt: null,
+  // What was left of the interval / of the walk when Pause was pressed, so that
+  // Resume continues the countdown instead of starting a new one.
+  pausedRemainingMs: null,
+  pausedWalkRemainingMs: null,
   snoozesUsed: 0,
   lastAlarmStep: -1,
   stats: {},
@@ -135,11 +139,17 @@ export function normalizeState(raw) {
   const input = raw && typeof raw === 'object' ? raw : {};
   const phases = ['idle', 'waiting', 'due', 'paused'];
   const timestamp = (key) => (Number.isFinite(Number(input[key])) && input[key] !== null ? Number(input[key]) : null);
+  const duration = (key) => {
+    const value = timestamp(key);
+    return value === null ? null : Math.max(0, value);
+  };
   return {
     phase: phases.includes(input.phase) ? input.phase : 'idle',
     nextDueAt: timestamp('nextDueAt'),
     dueSince: timestamp('dueSince'),
     walkEndsAt: timestamp('walkEndsAt'),
+    pausedRemainingMs: duration('pausedRemainingMs'),
+    pausedWalkRemainingMs: duration('pausedWalkRemainingMs'),
     snoozesUsed: Number.isFinite(Number(input.snoozesUsed)) ? Number(input.snoozesUsed) : 0,
     lastAlarmStep: Number.isFinite(Number(input.lastAlarmStep)) ? Number(input.lastAlarmStep) : -1,
     stats: input.stats && typeof input.stats === 'object' ? input.stats : {},
