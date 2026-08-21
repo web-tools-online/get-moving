@@ -13,6 +13,8 @@ import {
   escalationStep,
   volumeForStep,
   planSnooze,
+  planPause,
+  planResume,
   dayKey,
   addWalk,
   pruneStats,
@@ -146,6 +148,43 @@ test('snooze is capped and rationed under infuriating', () => {
   assert.equal(exhausted.until, null);
 });
 
+test('pausing banks the time left, and resuming continues from there', () => {
+  const paused = planPause({ phase: 'waiting', nextDueAt: at(10), walkEndsAt: null }, at(9, 40));
+  assert.equal(paused.pausedRemainingMs, 20 * MINUTE);
+  assert.equal(paused.pausedWalkRemainingMs, null);
+
+  // Twenty minutes of pause later, twenty minutes are still on the clock.
+  const resumed = planResume({ ...paused }, at(10), settings);
+  assert.equal(resumed.nextDueAt, at(10, 20), 'not a fresh interval');
+  assert.equal(resumed.walkEndsAt, null);
+});
+
+test('pausing mid-walk keeps the rest of the walk too', () => {
+  const paused = planPause({ phase: 'waiting', nextDueAt: at(10), walkEndsAt: at(9, 10) }, at(9, 4));
+  assert.equal(paused.pausedWalkRemainingMs, 6 * MINUTE);
+  const resumed = planResume(paused, at(9, 30), settings);
+  assert.equal(resumed.walkEndsAt, at(9, 36));
+  assert.equal(resumed.nextDueAt, at(10, 26));
+});
+
+test('pausing a nudge that is already due leaves nothing to wait for', () => {
+  const paused = planPause({ phase: 'due', nextDueAt: at(9), walkEndsAt: null }, at(9, 15));
+  assert.equal(paused.pausedRemainingMs, 0);
+  assert.equal(planResume(paused, at(11), settings).nextDueAt, at(11), 'due again as soon as it resumes');
+});
+
+test('resuming a state with nothing banked falls back to a whole interval', () => {
+  const resumed = planResume({ phase: 'paused' }, at(9), settings);
+  assert.equal(resumed.nextDueAt, at(10));
+  assert.equal(resumed.walkEndsAt, null);
+});
+
+test('a resume landing in quiet hours is deferred like any other due time', () => {
+  const quiet = { ...settings, quietHoursEnabled: true, quietFrom: '22:00', quietTo: '07:00' };
+  const resumed = planResume({ pausedRemainingMs: 10 * MINUTE }, at(21, 55), quiet);
+  assert.equal(resumed.nextDueAt, at(7, 0, 22));
+});
+
 test('a snooze landing in quiet hours is deferred too', () => {
   const quiet = { ...settings, quietHoursEnabled: true, quietFrom: '22:00', quietTo: '07:00', snoozeMinutes: 10 };
   const plan = planSnooze(at(21, 55), quiet, ANNOYANCE_PROFILES.nagging, 0);
@@ -214,6 +253,14 @@ test('a corrupt saved state degrades to idle rather than throwing', () => {
   assert.equal(state.phase, 'idle');
   assert.equal(state.nextDueAt, null);
   assert.deepEqual(state.stats, {});
+});
+
+test('a banked pause survives normalization; a nonsensical one does not', () => {
+  const kept = normalizeState({ phase: 'paused', pausedRemainingMs: 12 * MINUTE, pausedWalkRemainingMs: -5 });
+  assert.equal(kept.pausedRemainingMs, 12 * MINUTE);
+  assert.equal(kept.pausedWalkRemainingMs, 0, 'negative time left is no time left');
+  const older = normalizeState({ phase: 'paused' });
+  assert.equal(older.pausedRemainingMs, null, 'state written before pausing banked anything');
 });
 
 test('a walk longer than the interval must not be interrupted by the next nudge', () => {

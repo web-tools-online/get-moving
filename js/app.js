@@ -14,6 +14,8 @@ import {
   escalationStep,
   volumeForStep,
   planSnooze,
+  planPause,
+  planResume,
   addWalk,
   statsForDay,
   recentDays,
@@ -98,6 +100,8 @@ async function start() {
     nextDueAt: nextDueFrom(Date.now(), settings),
     dueSince: null,
     walkEndsAt: null,
+    pausedRemainingMs: null,
+    pausedWalkRemainingMs: null,
     snoozesUsed: 0,
     lastAlarmStep: -1,
   };
@@ -154,13 +158,27 @@ function snooze() {
   render();
 }
 
+/**
+ * Pause banks the time left on the clock; Resume puts it back. A pause is a
+ * break in the sitting, not a fresh cycle — 12 min left before the pause is
+ * still 12 min left after it.
+ */
 function togglePause() {
+  const now = Date.now();
   if (state.phase === 'paused') {
+    const resumed = planResume(state, now, settings);
     state.phase = 'waiting';
-    state.nextDueAt = nextDueFrom(Date.now(), settings);
+    state.nextDueAt = resumed.nextDueAt;
+    state.walkEndsAt = settings.sitNudgeEnabled ? resumed.walkEndsAt : null;
+    state.pausedRemainingMs = null;
+    state.pausedWalkRemainingMs = null;
+    state.dueSince = null;
     state.lastAlarmStep = -1;
   } else {
+    const held = planPause(state, now);
     state.phase = 'paused';
+    state.pausedRemainingMs = held.pausedRemainingMs;
+    state.pausedWalkRemainingMs = held.pausedWalkRemainingMs;
     state.nextDueAt = null;
     state.dueSince = null;
     state.walkEndsAt = null;
@@ -335,8 +353,12 @@ function render() {
     ui.countdown.textContent = `+${formatDuration(now - state.dueSince)}`;
     ui['status-note'].textContent = 'Sitting time since the nudge. It is not going to stop on its own.';
   } else if (state.phase === 'paused') {
-    ui.countdown.textContent = '—';
-    ui['status-note'].textContent = 'Nothing scheduled. Resume when you are back.';
+    const held = state.pausedRemainingMs;
+    ui.countdown.textContent = held === null ? '—' : formatDuration(held);
+    ui['status-note'].textContent =
+      held === null
+        ? 'Nothing scheduled. Resume when you are back.'
+        : 'Held here. Resume picks the countdown up where it stopped.';
   } else {
     ui.countdown.textContent = '—';
     ui['status-note'].textContent = 'Press start, then leave this tab open in the background.';
@@ -344,11 +366,14 @@ function render() {
 
   // Progress across the current interval, so a glance tells you where you are.
   let progress = 0;
+  const span = settings.intervalMinutes * MINUTE;
   if (state.phase === 'waiting' && state.nextDueAt) {
-    const span = settings.intervalMinutes * MINUTE;
     progress = 1 - Math.min(1, Math.max(0, (state.nextDueAt - now) / span));
   } else if (isDue) {
     progress = 1;
+  } else if (state.phase === 'paused' && state.pausedRemainingMs !== null) {
+    // Frozen where the pause caught it, so the bar matches the held countdown.
+    progress = 1 - Math.min(1, Math.max(0, state.pausedRemainingMs / span));
   }
   ui['progress-bar'].style.width = `${(progress * 100).toFixed(1)}%`;
 
@@ -360,9 +385,13 @@ function render() {
   ui['btn-reset'].hidden = state.phase === 'idle';
   ui['btn-walking'].textContent = isDue ? "I'm walking 🚶" : 'Walk now (restart the clock)';
 
-  if (state.walkEndsAt) {
+  // A walk in progress keeps its banner across a pause, showing the held remainder.
+  const walkLeft = state.walkEndsAt
+    ? state.walkEndsAt - now
+    : (state.phase === 'paused' ? state.pausedWalkRemainingMs : null);
+  if (walkLeft !== null) {
     ui['walk-banner'].hidden = false;
-    ui['walk-remaining'].textContent = formatDuration(state.walkEndsAt - now);
+    ui['walk-remaining'].textContent = formatDuration(walkLeft);
   } else {
     ui['walk-banner'].hidden = true;
   }
@@ -465,6 +494,13 @@ function onSettingsChanged() {
     const elapsed = previous.intervalMinutes * MINUTE - (state.nextDueAt - Date.now());
     const reanchored = Date.now() + settings.intervalMinutes * MINUTE - Math.max(0, elapsed);
     state.nextDueAt = applyQuietHours(Math.max(Date.now(), reanchored), settings);
+    persist();
+  }
+
+  // Same for a held countdown: shortening the interval must not leave a pause
+  // banking more time than the interval now allows.
+  if (state.phase === 'paused' && state.pausedRemainingMs !== null && settings.intervalMinutes !== previous.intervalMinutes) {
+    state.pausedRemainingMs = Math.min(state.pausedRemainingMs, settings.intervalMinutes * MINUTE);
     persist();
   }
   render();
