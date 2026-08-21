@@ -55,6 +55,18 @@ const NOTIFICATION_SPY = `
   window.Notification = SpyNotification;
 `;
 
+/** Records the workers the page starts, so the title's beat can be traced to one. */
+const WORKER_SPY = `
+  window.__workers = [];
+  const RealWorker = window.Worker;
+  window.Worker = class extends RealWorker {
+    constructor(url, options) {
+      window.__workers.push(String(url));
+      super(url, options);
+    }
+  };
+`;
+
 /** Counts every oscillator the page schedules, which is how "did it play" is checked. */
 const AUDIO_SPY = `
   window.__oscillators = 0;
@@ -76,6 +88,7 @@ async function main() {
   await context.grantPermissions(['notifications'], { origin: ORIGIN });
   await context.addInitScript(NOTIFICATION_SPY);
   await context.addInitScript(AUDIO_SPY);
+  await context.addInitScript(WORKER_SPY);
 
   const page = await context.newPage();
   const errors = [];
@@ -184,6 +197,14 @@ async function main() {
       `the title moved rather than changing content ("${first}" -> "${second}")`,
     );
     assert.ok(second.includes('Get Moving'), 'the app name travels with the nag');
+
+    // The beat has to come from a worker, or the scroll stops dead in a
+    // background tab — which is the only place this feature matters.
+    const workers = await page.evaluate(() => window.__workers);
+    assert.ok(
+      workers.some((url) => url.includes('marquee-worker.js')),
+      `the title is driven by a worker timer, saw workers: ${JSON.stringify(workers)}`,
+    );
   });
 
   check('acknowledging restarts the clock at a full interval', async () => {
