@@ -7,12 +7,12 @@ const ORIGINAL_TITLE = document.title;
 
 /** How the nag reads in the tab: the message, the app name, and back around. */
 const MARQUEE_SEPARATOR = ' · ';
-const MARQUEE_STEP_MS = 250;
-const FAVICON_STEP_MS = 800;
+const TICK_MS = 200;
+const FAVICON_EVERY = 4; // ticks — the icon flips every 800 ms, as it always did
+const REDUCED_MOTION_EVERY = 5; // ticks — one character a second instead of five
 
-let titleTimer = null;
+let stopTicker = null;
 let titleMessage = null;
-let faviconTimer = null;
 let faviconOn = false;
 let originalFavicon = null;
 let alarmFaviconUrl = null;
@@ -53,57 +53,82 @@ function prefersReducedMotion() {
 }
 
 /**
- * Scroll the nag across the tab title, one character per step. Split by code
- * point rather than by index, or rotating past the emoji cuts it in half and
- * leaves a stray surrogate in the title.
+ * The beat for the whole nag. The page's own timers are throttled the moment the
+ * tab goes to the background, so the ticks come from a worker instead; a page
+ * repainting on a message is not throttled the way a page waiting on
+ * `setInterval` is. Returns the function that stops it.
  */
-function scrollTitle(message) {
-  const characters = Array.from(`${message}${MARQUEE_SEPARATOR}${ORIGINAL_TITLE}${MARQUEE_SEPARATOR}`);
-  let offset = 0;
-  const step = () => {
-    document.title = characters.slice(offset).concat(characters.slice(0, offset)).join('');
-    offset = (offset + 1) % characters.length;
+function startTicker(onTick) {
+  // The page's own timer: throttled in a hidden tab, but better than a title that
+  // has stopped moving altogether.
+  let fallbackId = null;
+  let stopped = false;
+  const useOwnTimer = () => {
+    if (stopped || fallbackId !== null) return;
+    fallbackId = setInterval(onTick, TICK_MS);
   };
-  step();
-  return setInterval(step, MARQUEE_STEP_MS);
-}
 
-/** The still version, for anyone who has asked the system for less movement. */
-function alternateTitle(message) {
-  let on = false;
-  const step = () => {
-    on = !on;
-    document.title = on ? message : ORIGINAL_TITLE;
+  let worker = null;
+  try {
+    worker = new Worker(new URL('./marquee-worker.js', import.meta.url));
+    worker.addEventListener('message', onTick);
+    // A worker that cannot be fetched fails asynchronously, long after the
+    // constructor returned happily, so the error event is the only thing standing
+    // between a missing file and a title that scrolls one frame and stops.
+    worker.addEventListener('error', useOwnTimer);
+    worker.postMessage({ everyMs: TICK_MS });
+  } catch {
+    // Workers are unavailable outright: opened from file://, or blocked by policy.
+    useOwnTimer();
+  }
+
+  return () => {
+    stopped = true;
+    worker?.terminate();
+    if (fallbackId !== null) clearInterval(fallbackId);
   };
-  step();
-  return setInterval(step, FAVICON_STEP_MS);
 }
 
 /**
- * Put the tab itself to work: the title starts moving and the favicon turns into
- * a red alert dot, until `stopTitleAlarm()`. A tab that is scrolling is visible
- * out of the corner of an eye in a way a static "(1)" never is.
+ * Put the tab itself to work: the title scrolls the nag and the app name past,
+ * one character at a time, and the favicon turns into a red alert dot, until
+ * `stopTitleAlarm()`. A tab that is moving is visible out of the corner of an eye
+ * in a way a tab that merely renamed itself is not.
  */
 export function startTitleAlarm(message) {
-  if (titleTimer && titleMessage === message) return; // already running for this message
+  if (stopTicker && titleMessage === message) return; // already running for this message
   stopTitleAlarm();
   titleMessage = message;
-  titleTimer = prefersReducedMotion() ? alternateTitle(message) : scrollTitle(message);
 
+  // Split by code point, not by index, or rotating past the emoji cuts it in half
+  // and leaves a stray surrogate in the title.
+  const characters = Array.from(`${message}${MARQUEE_SEPARATOR}${ORIGINAL_TITLE}${MARQUEE_SEPARATOR}`);
+  // Asking the system for less motion slows the scroll rather than stopping it —
+  // a title that has stopped moving is the thing this is here to fix.
+  const scrollEvery = prefersReducedMotion() ? REDUCED_MOTION_EVERY : 1;
   const link = faviconLink();
-  const flip = () => {
-    faviconOn = !faviconOn;
-    link.href = faviconOn ? alarmFavicon() : originalFavicon;
+  let tick = 0;
+  let offset = 0;
+
+  const step = () => {
+    if (tick % scrollEvery === 0) {
+      document.title = characters.slice(offset).concat(characters.slice(0, offset)).join('');
+      offset = (offset + 1) % characters.length;
+    }
+    if (tick % FAVICON_EVERY === 0) {
+      faviconOn = !faviconOn;
+      link.href = faviconOn ? alarmFavicon() : originalFavicon;
+    }
+    tick += 1;
   };
-  flip();
-  faviconTimer = setInterval(flip, FAVICON_STEP_MS);
+
+  step();
+  stopTicker = startTicker(step);
 }
 
 export function stopTitleAlarm() {
-  clearInterval(titleTimer);
-  clearInterval(faviconTimer);
-  titleTimer = null;
-  faviconTimer = null;
+  stopTicker?.();
+  stopTicker = null;
   titleMessage = null;
   faviconOn = false;
   document.title = ORIGINAL_TITLE;
@@ -112,7 +137,7 @@ export function stopTitleAlarm() {
 
 /** A quiet title change for levels that do not move the tab. */
 export function setTitleSuffix(suffix) {
-  if (titleTimer) return; // a running alarm owns the title
+  if (stopTicker) return; // a running alarm owns the title
   document.title = suffix ? `${suffix} — ${ORIGINAL_TITLE}` : ORIGINAL_TITLE;
 }
 

@@ -53,10 +53,23 @@ make that painless:
 | Full-screen takeover | none | dismissible | blocking; snooze unlocks after 5 s |
 
 The scrolling title runs the nag and the app name past the tab, a character at a
-time, so a tab you are not looking at still moves in the corner of your eye. A
-background tab has its timers clamped, so the scroll slows to a crawl there
-unless **Keep timers precise** is on. If your system is set to *reduce motion*,
-the title alternates in place instead of scrolling.
+time, so a tab you are not looking at still moves in the corner of your eye —
+the point being a tab that *keeps moving*, not one that renamed itself once.
+
+That is harder than it sounds in the place it matters. A hidden tab has its
+timers clamped to one a second, and to one a minute once it has been hidden for
+five, which would leave the title shuffling a character a minute. So the scroll
+is driven by a timer inside a worker, which is not clamped, and while a nudge is
+unacknowledged the page holds the near-silent keep-alive tone open whatever
+**Keep timers precise** is set to — an audible tab is one the browser will not
+freeze. The speaker icon appears on the tab for as long as the nudge is up and
+goes away when you acknowledge it. Where a worker cannot start at all — opened
+from `file://`, say — the scroll falls back to the page's own timer, which works
+but crawls in a background tab.
+
+If your system asks for *reduce motion*, the title scrolls a character a second
+instead of five — slower, but still moving, since a still title is the thing
+this is here to fix.
 
 ## Accuracy in a background tab
 
@@ -114,6 +127,7 @@ node test/browser-check.mjs        # screenshots land in test/screenshots/
 | `js/alarm.js` | WebAudio chimes and the anti-throttling keep-alive. |
 | `js/notify.js` | Notification permission and delivery. |
 | `js/attention.js` | The scrolling tab title, favicon swap, the overlay. |
+| `js/marquee-worker.js` | The unthrottled timer the scrolling title runs on. |
 | `sw.js` | Routes notification clicks back into the page; small offline cache. |
 
 ### Worth checking by hand
@@ -128,5 +142,8 @@ Some of this cannot be automated, and it is what actually matters day to day:
       paused rather than starting a fresh interval.
 - [ ] Sleep the machine past a nudge, wake it, and confirm the clock restarts.
 - [ ] Install as an app and confirm it nags from its own window.
-- [ ] Let a nudge fire with the tab in the background and watch the tab name
-      scroll; turn on *reduce motion* in the OS and confirm it alternates instead.
+- [ ] Let a nudge fire with the tab in the background, leave it there for more
+      than five minutes, and confirm the tab name is still scrolling — not
+      inching a character at a time.
+- [ ] Turn on *reduce motion* in the OS and confirm the title still moves, just
+      more slowly.

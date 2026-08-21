@@ -26,6 +26,7 @@ const ASSETS = [
   './js/alarm.js',
   './js/notify.js',
   './js/attention.js',
+  './js/marquee-worker.js',
 ];
 
 self.addEventListener('install', (event) => {

@@ -55,6 +55,18 @@ const NOTIFICATION_SPY = `
   window.Notification = SpyNotification;
 `;
 
+/** Records the workers the page starts, so the title's beat can be traced to one. */
+const WORKER_SPY = `
+  window.__workers = [];
+  const RealWorker = window.Worker;
+  window.Worker = class extends RealWorker {
+    constructor(url, options) {
+      window.__workers.push(String(url));
+      super(url, options);
+    }
+  };
+`;
+
 /** Counts every oscillator the page schedules, which is how "did it play" is checked. */
 const AUDIO_SPY = `
   window.__oscillators = 0;
@@ -76,6 +88,7 @@ async function main() {
   await context.grantPermissions(['notifications'], { origin: ORIGIN });
   await context.addInitScript(NOTIFICATION_SPY);
   await context.addInitScript(AUDIO_SPY);
+  await context.addInitScript(WORKER_SPY);
 
   const page = await context.newPage();
   const errors = [];
@@ -184,6 +197,46 @@ async function main() {
       `the title moved rather than changing content ("${first}" -> "${second}")`,
     );
     assert.ok(second.includes('Get Moving'), 'the app name travels with the nag');
+
+    // The beat has to come from a worker, or the scroll stops dead in a
+    // background tab — which is the only place this feature matters.
+    const workers = await page.evaluate(() => window.__workers);
+    assert.ok(
+      workers.some((url) => url.includes('marquee-worker.js')),
+      `the title is driven by a worker timer, saw workers: ${JSON.stringify(workers)}`,
+    );
+  });
+
+  check('the title keeps moving when the page\'s own timers are throttled', async () => {
+    // A hidden tab has its own timers clamped to one a second, and to one a
+    // minute once it has been hidden for five. That cannot be reproduced from
+    // here, so the clamp is applied by hand: if the title still moves, its beat
+    // is coming from somewhere the throttling does not reach.
+    const throttled = await browser.newContext();
+    await throttled.grantPermissions(['notifications'], { origin: ORIGIN });
+    await throttled.addInitScript(NOTIFICATION_SPY);
+    await throttled.addInitScript(`
+      const real = window.setInterval.bind(window);
+      window.setInterval = (fn, ms, ...rest) => real(fn, Math.max(Number(ms) || 0, 60000), ...rest);
+    `);
+
+    const slowed = await throttled.newPage();
+    await slowed.goto(ORIGIN, { waitUntil: 'load' });
+    await slowed.click('#btn-start');
+    await slowed.evaluate(() => {
+      window.__moves = 0;
+      new MutationObserver(() => {
+        window.__moves += 1;
+      }).observe(document.querySelector('title'), { childList: true, subtree: true, characterData: true });
+      window.__getMoving.state.nextDueAt = Date.now() - 1000;
+      window.__getMoving.tick();
+    });
+
+    await slowed.waitForTimeout(3000);
+    const moves = await slowed.evaluate(() => window.__moves);
+    await throttled.close();
+    // ~15 at the 200 ms beat; a title driven by the page's own timer scores 1.
+    assert.ok(moves > 5, `the title scrolled on despite the clamp, saw ${moves} moves in 3 s`);
   });
 
   check('acknowledging restarts the clock at a full interval', async () => {

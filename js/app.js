@@ -324,6 +324,7 @@ function tick() {
     nagVisuals();
   }
 
+  applyKeepAlive();
   render();
 }
 
@@ -507,7 +508,12 @@ function onSettingsChanged() {
 }
 
 function applyKeepAlive() {
-  if (settings.preciseTimers && state.phase !== 'idle') {
+  // A nudge on screen keeps the tab audible whichever way the setting is set: a
+  // silent background tab gets its timers clamped and can be frozen outright,
+  // and a nag whose title has stopped moving is no nag at all. It goes quiet
+  // again the moment the nudge is acknowledged.
+  const wanted = state.phase === 'due' || (settings.preciseTimers && state.phase !== 'idle');
+  if (wanted) {
     alarm.startKeepAlive();
   } else {
     alarm.stopKeepAlive();
