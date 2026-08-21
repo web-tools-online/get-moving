@@ -37,7 +37,7 @@ make that painless:
 | **Nudge me every** | The interval. The next nudge is always this long after you press "I'm walking". |
 | **Walk for** | Only drives the "you can sit down now" cue and the daily tally — never the schedule. |
 | **Annoyance** | Gentle, Nagging or Infuriating. See below. |
-| **Volume** | Alarm loudness. The chime is synthesised, so there is nothing to download. |
+| **Volume** | Alarm loudness, shown as a percentage. **Test sound** plays the chime for the current annoyance level at that volume, so you can set it against your speakers instead of finding out an hour later. It works before you press Start — the click is the gesture that unlocks audio. The chime is synthesised, so there is nothing to download. |
 | **Snooze for** | How far a snooze pushes the nudge out. Infuriating caps this at 5 min, twice per cycle. |
 | **Quiet hours** | A window (it may cross midnight) where nudges are deferred to the end instead of firing. |
 | **Keep timers precise** | Plays an inaudible tone so the browser stops throttling the tab. See "Accuracy". |

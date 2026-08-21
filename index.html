@@ -88,12 +88,15 @@
         <span id="annoyance-blurb" class="field__hint"></span>
       </label>
 
-      <label class="field">
-        <span class="field__label">Volume</span>
+      <div class="field">
+        <label class="field__label" for="volume-input">Volume</label>
         <span class="field__control">
-          <input type="range" name="volume" min="0" max="1" step="0.05">
+          <input id="volume-input" type="range" name="volume" min="0" max="1" step="0.05">
+          <output id="volume-readout" class="field__unit field__unit--num" for="volume-input">60%</output>
+          <button id="btn-test-sound" class="btn btn--small" type="button">Test sound</button>
         </span>
-      </label>
+        <span id="sound-test-hint" class="field__hint">Plays the chime for the annoyance level you picked, at this volume. Set it against your speakers before you need it.</span>
+      </div>
 
       <label class="field">
         <span class="field__label">Snooze for</span>

@@ -53,10 +53,12 @@ function cacheElements() {
     'permission-note', 'walk-banner', 'walk-remaining',
     'today-walks', 'today-minutes', 'day-strip',
     'settings-form', 'annoyance-blurb', 'quiet-fields',
+    'volume-readout', 'btn-test-sound', 'sound-test-hint',
     'overlay', 'overlay-walking', 'overlay-snooze', 'toast',
   ].forEach((id) => {
     ui[id] = el(id);
   });
+  soundTestIdleHint = ui['sound-test-hint'].textContent;
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -217,6 +219,60 @@ function nagVisuals() {
   }
 }
 
+/* ------------------------------------------------------- testing the volume */
+
+// The "nothing to report yet" wording lives in the HTML; it is captured rather than
+// repeated here so the two cannot drift apart.
+let soundTestIdleHint = '';
+let soundTestTimer = null;
+
+function setSoundTestHint(message) {
+  ui['sound-test-hint'].textContent = message;
+}
+
+function volumePercent() {
+  return `${Math.round(settings.volume * 100)}%`;
+}
+
+function restoreTestButton() {
+  ui['btn-test-sound'].disabled = false;
+  ui['btn-test-sound'].textContent = 'Test sound';
+}
+
+/**
+ * Play the current chime on demand, so the volume can be judged against the
+ * speakers instead of being discovered an hour later. The click is itself the
+ * gesture that unlocks audio, which is why this works before Start is pressed.
+ */
+async function testSound() {
+  clearTimeout(soundTestTimer);
+  restoreTestButton();
+
+  if (settings.volume <= 0) {
+    setSoundTestHint('Volume is at zero — drag the slider up, then test again.');
+    return;
+  }
+
+  const unlocked = await alarm.unlock();
+  if (!unlocked || !alarm.play(settings.annoyance, settings.volume)) {
+    setSoundTestHint('This browser is blocking audio in the tab. Click anywhere on the page, then test again.');
+    return;
+  }
+
+  const current = profile();
+  setSoundTestHint(
+    current.volumeRamp
+      ? `Playing the ${current.label} chime at ${volumePercent()} — this is the first one; each repeat is louder.`
+      : `Playing the ${current.label} chime at ${volumePercent()}.`,
+  );
+
+  // Disabled for the length of the chime so repeated clicks cannot stack copies
+  // of it on top of each other.
+  ui['btn-test-sound'].disabled = true;
+  ui['btn-test-sound'].textContent = 'Playing…';
+  soundTestTimer = setTimeout(restoreTestButton, alarm.patternDurationMs(settings.annoyance));
+}
+
 /* -------------------------------------------------------------- tick + render */
 
 function tick() {
@@ -364,6 +420,7 @@ function fillSettingsForm() {
   form.preciseTimers.checked = settings.preciseTimers;
   ui['annoyance-blurb'].textContent = profile().blurb;
   ui['quiet-fields'].hidden = !settings.quietHoursEnabled;
+  ui['volume-readout'].textContent = volumePercent();
 }
 
 function readSettingsForm() {
@@ -388,6 +445,11 @@ function onSettingsChanged() {
   saveSettings(settings);
   fillSettingsForm();
   applyKeepAlive();
+
+  // Whatever the last test reported is stale as soon as either input to it moves.
+  if (settings.volume !== previous.volume || settings.annoyance !== previous.annoyance) {
+    setSoundTestHint(soundTestIdleHint);
+  }
 
   // A nudge already on screen must adopt the new annoyance level rather than
   // keeping the overlay mode it was opened with.
@@ -424,6 +486,7 @@ function bindEvents() {
   ui['btn-snooze'].addEventListener('click', snooze);
   ui['btn-pause'].addEventListener('click', togglePause);
   ui['btn-reset'].addEventListener('click', resetSchedule);
+  ui['btn-test-sound'].addEventListener('click', testSound);
   ui['overlay-walking'].addEventListener('click', acknowledgeWalk);
   ui['overlay-snooze'].addEventListener('click', snooze);
 
@@ -492,4 +555,5 @@ window.__getMoving = {
   tick,
   acknowledgeWalk,
   snooze,
+  testSound,
 };
