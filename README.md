@@ -4,8 +4,9 @@ A deliberately annoying reminder to get off the chair and onto the walking pad.
 
 Set an interval, leave the tab open, and get on with your work. Every hour (or
 whatever you pick) the page nags you — an OS notification, an escalating chime, a
-flashing tab title and a full-screen takeover — until you press **I'm walking**.
-Pressing it restarts the clock, so walking time counts toward the interval:
+tab title that scrolls past, and a full-screen takeover — until you press
+**I'm walking**. Pressing it restarts the clock, so walking time counts toward
+the interval:
 
 ```
 09:00  nudge  ->  "I'm walking"  ->  walk ~12 min  ->  sit
@@ -48,8 +49,14 @@ make that painless:
 | --- | --- | --- | --- |
 | Notification | auto-dismisses | stays until clicked | stays, and re-fires each round |
 | Chime | once | every 30 s, ten times | every 15 s, getting louder, forever |
-| Tab title & icon | quiet title change | flashing title, red icon | flashing title, red icon |
+| Tab title & icon | quiet title change | scrolling title, red icon | scrolling title, red icon |
 | Full-screen takeover | none | dismissible | blocking; snooze unlocks after 5 s |
+
+The scrolling title runs the nag and the app name past the tab, a character at a
+time, so a tab you are not looking at still moves in the corner of your eye. A
+background tab has its timers clamped, so the scroll slows to a crawl there
+unless **Keep timers precise** is on. If your system is set to *reduce motion*,
+the title alternates in place instead of scrolling.
 
 ## Accuracy in a background tab
 
@@ -106,7 +113,7 @@ node test/browser-check.mjs        # screenshots land in test/screenshots/
 | `js/app.js` | The tick loop, the state machine, and the UI bindings. |
 | `js/alarm.js` | WebAudio chimes and the anti-throttling keep-alive. |
 | `js/notify.js` | Notification permission and delivery. |
-| `js/attention.js` | Title flashing, favicon swap, the overlay. |
+| `js/attention.js` | The scrolling tab title, favicon swap, the overlay. |
 | `sw.js` | Routes notification clicks back into the page; small offline cache. |
 
 ### Worth checking by hand
@@ -121,3 +128,5 @@ Some of this cannot be automated, and it is what actually matters day to day:
       paused rather than starting a fresh interval.
 - [ ] Sleep the machine past a nudge, wake it, and confirm the clock restarts.
 - [ ] Install as an app and confirm it nags from its own window.
+- [ ] Let a nudge fire with the tab in the background and watch the tab name
+      scroll; turn on *reduce motion* in the OS and confirm it alternates instead.

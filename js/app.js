@@ -200,7 +200,7 @@ function resetSchedule() {
 /* ------------------------------------------------------------- the nagging */
 
 function stopNagging() {
-  attention.stopFlash();
+  attention.stopTitleAlarm();
   attention.hideOverlay();
   attention.setTitleSuffix('');
 }
@@ -222,8 +222,8 @@ function fireAlarm(step) {
 
 function nagVisuals() {
   const current = profile();
-  if (current.flashTitle) {
-    attention.startFlash('🚶 GET UP');
+  if (current.animateTitle) {
+    attention.startTitleAlarm('🚶 GET UP');
   } else {
     attention.setTitleSuffix('Time to walk');
   }
@@ -483,7 +483,7 @@ function onSettingsChanged() {
   // A nudge already on screen must adopt the new annoyance level rather than
   // keeping the overlay mode it was opened with.
   if (state.phase === 'due' && settings.annoyance !== previous.annoyance) {
-    attention.stopFlash();
+    attention.stopTitleAlarm();
     attention.hideOverlay();
     nagVisuals();
   }
