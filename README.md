@@ -14,8 +14,8 @@ the interval:
 11:00  nudge  ...
 ```
 
-No accounts, no server, no tracking. Everything lives in your browser's
-`localStorage`.
+No accounts, no server, no tracking. Everything lives in your browser's own
+storage.
 
 ## Running it
 
@@ -30,6 +30,12 @@ make that painless:
 - Leave it in a background tab. It is a normal tab and costs nothing.
 - Install it as an app (Chrome/Edge: the install icon in the address bar) so it
   gets its own window, out of the way of your browsing.
+
+Closing the page stops the countdown, and opening it again starts from scratch —
+press **Start** for a fresh interval. A reload is not a close: refresh the tab
+mid-cycle and the countdown carries on where it was, so an accidental F5 costs
+nothing. The running schedule is the only thing tied to the open page; your
+settings and the walk tally are kept between sessions.
 
 ### Settings
 
@@ -122,7 +128,7 @@ node test/browser-check.mjs        # screenshots land in test/screenshots/
 | --- | --- |
 | `index.html`, `styles.css` | The page. One stylesheet, no external fonts. |
 | `js/scheduler.js` | Pure scheduling logic. Start here. |
-| `js/settings.js` | Defaults, annoyance profiles, `localStorage` persistence. |
+| `js/settings.js` | Defaults, annoyance profiles, persistence. Settings and the walk log go to `localStorage`; the running schedule goes to `sessionStorage`, which is what ties it to the open page. |
 | `js/app.js` | The tick loop, the state machine, and the UI bindings. |
 | `js/alarm.js` | WebAudio chimes and the anti-throttling keep-alive. |
 | `js/notify.js` | Notification permission and delivery. |
@@ -138,6 +144,10 @@ Some of this cannot be automated, and it is what actually matters day to day:
 - [ ] Clicking the notification focuses the tab; its **I'm walking** button
       acknowledges without you touching the page.
 - [ ] Reload mid-cycle — the countdown carries on where it was.
+- [ ] Close the tab mid-cycle and open the page again — it comes back idle, with
+      the day's walk tally intact, and **Start** begins a full fresh interval.
+- [ ] Quit the browser mid-cycle and let it restore the session on relaunch — the
+      restored tab must start idle, not resume an hour-old countdown.
 - [ ] Pause, wait a while, resume — the countdown continues from where it was
       paused rather than starting a fresh interval.
 - [ ] Sleep the machine past a nudge, wake it, and confirm the clock restarts.

@@ -41,6 +41,13 @@ import * as attention from './attention.js';
 
 const TICK_MS = 1000;
 
+/**
+ * How often a running page re-stamps the stored schedule. The stamp is what marks
+ * the countdown as belonging to a page that is genuinely open, so it has to keep
+ * beating even through an hour of waiting with nothing else to write.
+ */
+const HEARTBEAT_MS = 15_000;
+
 let settings = loadSettings();
 let state = loadState();
 
@@ -66,7 +73,9 @@ function cacheElements() {
 /* ------------------------------------------------------------------ helpers */
 
 function persist() {
-  saveState(state);
+  const now = Date.now();
+  state.heartbeatAt = now;
+  saveState(state, now);
 }
 
 function profile() {
@@ -324,6 +333,10 @@ function tick() {
     nagVisuals();
   }
 
+  // Keep the stored schedule stamped as live; without this an hour of quiet
+  // waiting would look, to the next page load, exactly like a closed tab.
+  if (state.phase !== 'idle' && now - (state.heartbeatAt ?? 0) >= HEARTBEAT_MS) persist();
+
   applyKeepAlive();
   render();
 }
@@ -571,8 +584,9 @@ function init() {
   renderPermissionNote();
   notify.initServiceWorker();
 
-  // A reload mid-cycle must not lose the schedule, but audio cannot restart
-  // without a gesture — the next click or the overlay button restores it.
+  // A reload mid-cycle must not lose the schedule (it is kept per tab, and only
+  // a closed tab drops it), but audio cannot restart without a gesture — the next
+  // click or the overlay button restores it.
   if (state.phase === 'due') state.lastAlarmStep = -1;
 
   render();

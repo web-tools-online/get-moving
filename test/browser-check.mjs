@@ -266,6 +266,48 @@ async function main() {
     assert.deepEqual(after.stats, before.stats, 'the stats survived the reload');
   });
 
+  check('closing the page ends the countdown; opening it again starts over', async () => {
+    const before = await state();
+    assert.equal(before.phase, 'waiting', 'precondition: a countdown is running in this tab');
+
+    // A second page is a second tab, which is what reopening the app amounts to:
+    // the schedule was tied to the page that is gone.
+    const reopened = await context.newPage();
+    await reopened.goto(ORIGIN, { waitUntil: 'load' });
+    const fresh = await reopened.evaluate(() => JSON.parse(JSON.stringify(window.__getMoving.state)));
+    assert.equal(fresh.phase, 'idle', 'the new page picked up a countdown it should not have');
+    assert.equal(fresh.nextDueAt, null);
+    assert.equal(await reopened.getAttribute('body', 'data-phase'), 'idle');
+    assert.deepEqual(fresh.stats, before.stats, 'the walk log is not tab-scoped and must survive');
+    await reopened.close();
+
+    assert.equal((await state()).nextDueAt, before.nextDueAt, 'the original tab kept its own clock');
+  });
+
+  check('a restored session does not resurrect an old countdown', async () => {
+    const restored = await context.newPage();
+    await restored.goto(ORIGIN, { waitUntil: 'load' });
+    // What a browser hands back when it reopens the tabs from last time: the
+    // sessionStorage of a page that stopped running hours ago.
+    await restored.evaluate(() => {
+      sessionStorage.setItem(
+        'get-moving:state:v1',
+        JSON.stringify({
+          phase: 'waiting',
+          nextDueAt: Date.now() + 30 * 60_000,
+          heartbeatAt: Date.now() - 60 * 60_000,
+        }),
+      );
+    });
+    await restored.reload({ waitUntil: 'load' });
+    assert.equal(
+      await restored.evaluate(() => window.__getMoving.state.phase),
+      'idle',
+      'an hour-old schedule was resumed instead of being dropped',
+    );
+    await restored.close();
+  });
+
   check('pause holds the countdown and resume continues it', async () => {
     // Wind the clock most of the way through the interval, so a restarted
     // countdown is unmistakable next to a continued one.
