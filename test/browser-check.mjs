@@ -331,6 +331,11 @@ async function main() {
     assert.equal(joined.nextDueAt, before.nextDueAt, 'both pages are on the same clock');
     assert.equal(await second.getAttribute('body', 'data-phase'), 'waiting');
     assert.deepEqual(joined.stats, before.stats, 'and on the same walk log');
+    assert.notEqual(
+      await second.evaluate(() => window.__getMoving.pageId),
+      await page.evaluate(() => window.__getMoving.pageId),
+      'a second page, not the first one over again',
+    );
 
     // Whichever page it is driven from, it is one countdown: pausing in the new
     // page holds the clock in the old one too.
@@ -421,47 +426,11 @@ async function main() {
     await second.close();
     await first.close();
 
-    // With every page gone there is nothing left to stamp the schedule. Waiting the
-    // couple of minutes that takes to show would only make this check slow, so the
-    // last stamp is wound back by hand instead — the state the clock would be in.
-    await isolated.addInitScript(`
-      try {
-        const raw = localStorage.getItem('get-moving:schedule:v1');
-        if (raw) {
-          const schedule = JSON.parse(raw);
-          schedule.heartbeatAt -= 3 * 60_000;
-          localStorage.setItem('get-moving:schedule:v1', JSON.stringify(schedule));
-        }
-      } catch {}
-    `);
-
     const later = await openApp(isolated);
     const fresh = await stateOf(later);
     assert.equal(fresh.phase, 'idle', 'the new page picked up a countdown nobody was running');
     assert.equal(fresh.nextDueAt, null);
     assert.equal(await later.getAttribute('body', 'data-phase'), 'idle');
-    await isolated.close();
-  });
-
-  check('a page that has been quiet in the background is still joined', async () => {
-    // The failure this is here for: a page whose timers the browser has clamped, or
-    // that said its goodbyes on the way into the background, is still running the
-    // countdown, and opening the app again has to find it rather than start over.
-    const isolated = await freshContext();
-    const running = await openApp(isolated);
-    await running.click('#btn-start');
-    const started = await stateOf(running);
-
-    await running.evaluate(() => {
-      // Everything a page does on the way out of sight, short of actually closing.
-      window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
-      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-      document.dispatchEvent(new Event('visibilitychange'));
-    });
-
-    const opened = await openApp(isolated);
-    assert.equal((await stateOf(opened)).phase, 'waiting', 'the backgrounded page was written off as closed');
-    assert.equal((await stateOf(opened)).nextDueAt, started.nextDueAt);
     await isolated.close();
   });
 

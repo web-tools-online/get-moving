@@ -5,15 +5,13 @@
  *
  * Everything the app keeps lives in localStorage, including the running countdown:
  * open the app a second time and both pages are meant to be looking at the same
- * clock, not at two of them. A countdown is still supposed to stop when the last
- * page closes, and what stands in for that is the heartbeat every open page stamps
- * on the schedule: a page picks the schedule up while something is beating it, and
- * starts fresh once nothing has been for `STALE_STATE_MS`. That is deliberately the
- * only test. Anything a page announces about itself — an "I am open" register, a
- * goodbye on the way out — can be wrong in both directions (a tab put to sleep in
- * the background never says goodbye; a tab that is merely hidden may say it while
- * it goes on running), and a countdown that fails to be joined is the whole
- * feature failing.
+ * clock, not at two of them. What localStorage cannot say on its own is whether
+ * anyone is still watching, and a countdown is supposed to stop when the last page
+ * closes. So each open page registers itself under `PAGES_KEY` and strikes itself
+ * off as it goes away, and each page's own id is kept in sessionStorage, which
+ * survives its reloads and dies with it. A schedule is picked up only when another
+ * page is open right now, or when this very page is coming back from a reload —
+ * otherwise it is a countdown nobody is running, and the clock starts fresh.
  */
 
 import { clamp, hmToMinutes } from './scheduler.js';
@@ -21,17 +19,21 @@ import { clamp, hmToMinutes } from './scheduler.js';
 export const SETTINGS_KEY = 'get-moving:settings:v1';
 /** The running schedule — localStorage, shared by every page that has the app open. */
 export const SCHEDULE_KEY = 'get-moving:schedule:v1';
+/** Who is open right now: `{ [pageId]: heartbeatMs }`, in localStorage. */
+export const PAGES_KEY = 'get-moving:pages:v1';
+/** This page's own id — sessionStorage, so a reload comes back as the same page. */
+export const PAGE_ID_KEY = 'get-moving:page:v1';
 /** The walk log — localStorage, so it outlives the page it was earned in. */
 export const STATS_KEY = 'get-moving:stats:v1';
 /** Pre-sharing key: a combined blob in localStorage, then a per-tab schedule in sessionStorage. */
 export const LEGACY_STATE_KEY = 'get-moving:state:v1';
 
 /**
- * How stale the schedule's heartbeat may be before we stop believing anyone is
- * running it. A hidden page still beats about once a minute (its timers get
+ * How stale a heartbeat — a page's or the schedule's — may be before we stop
+ * believing it. A hidden page still beats about once a minute (its timers get
  * clamped), so the window has to clear that comfortably; anything beyond it means
- * every page that was holding the countdown is gone — or that it is one a browser
- * session restore is trying to hand back — and the clock starts fresh.
+ * nothing was actually open — a browser restore handing back the page id of a tab
+ * that was closed hours ago, say — and the clock starts fresh.
  */
 export const STALE_STATE_MS = 2 * 60_000;
 
@@ -157,6 +159,22 @@ function removeKey(kind, key) {
   }
 }
 
+function readText(kind, key) {
+  try {
+    return store(kind)?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeText(kind, key, value) {
+  try {
+    store(kind)?.setItem(key, value);
+  } catch {
+    /* storage disabled — this page just cannot be recognised after a reload */
+  }
+}
+
 export function loadSettings() {
   return normalizeSettings(readJson('local', SETTINGS_KEY));
 }
@@ -231,6 +249,50 @@ export function saveStats(stats) {
   writeJson('local', STATS_KEY, stats ?? {});
 }
 
+/* ------------------------------------------------------- who has the app open */
+
+function newPageId() {
+  try {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  } catch {
+    /* fall through to the cheap one */
+  }
+  return `p${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** The open pages, minus any whose heartbeat has gone quiet for too long. */
+function readPages(nowMs) {
+  const raw = readJson('local', PAGES_KEY);
+  const pages = {};
+  if (raw && typeof raw === 'object') {
+    for (const [id, beat] of Object.entries(raw)) {
+      const at = Number(beat);
+      if (Number.isFinite(at) && nowMs - at <= STALE_STATE_MS) pages[id] = at;
+    }
+  }
+  return pages;
+}
+
+/** True when some page other than this one has the app open right now. */
+export function hasOpenPage(exceptId, nowMs = Date.now()) {
+  return Object.keys(readPages(nowMs)).some((id) => id !== exceptId);
+}
+
+/** Register this page as open. Also the heartbeat — it is the same write. */
+export function markPageOpen(id, nowMs = Date.now()) {
+  writeJson('local', PAGES_KEY, { ...readPages(nowMs), [id]: nowMs });
+}
+
+/**
+ * Strike this page off, which is what tells a close from a reload: both drop the
+ * page out of the register, but only a reload brings back the id in sessionStorage.
+ */
+export function markPageClosed(id, nowMs = Date.now()) {
+  const pages = readPages(nowMs);
+  delete pages[id];
+  writeJson('local', PAGES_KEY, pages);
+}
+
 /* -------------------------------------------------------------- the schedule */
 
 /** The shared schedule as it stands in storage, or null when there is none worth having. */
@@ -247,24 +309,31 @@ export function saveSchedule(state, nowMs = Date.now()) {
 }
 
 /**
- * Opening the app: pick up the countdown if one is running, and start fresh if not.
+ * Opening the app: take an id, join the countdown if there is a live one to join,
+ * and register as open.
  *
- * "Running" means the schedule's heartbeat is still being stamped, which is true
- * exactly while some page has the app open — this one before its reload, or another
- * one right now. A schedule nothing has beaten for `STALE_STATE_MS` belonged to
- * pages that are all gone, or is one a browser session restore is trying to hand
- * back, and it is dropped rather than resumed.
+ * "Live" means a page other than this one is open right now, or this is the same
+ * page coming back from a reload. A schedule with neither behind it belonged to
+ * pages that are all gone — or is one a browser session restore is trying to hand
+ * back — and it is dropped rather than resumed.
  */
-export function loadState(nowMs = Date.now()) {
-  // The per-tab schedule the version before this one kept. Nothing reads it any
+export function openPage(nowMs = Date.now()) {
+  const previousId = readText('session', PAGE_ID_KEY);
+  const reloaded = typeof previousId === 'string' && previousId.length > 0;
+  const id = reloaded ? previousId : newPageId();
+  writeText('session', PAGE_ID_KEY, id);
+  // The per-tab schedule the version before this one kept here. Nothing reads it any
   // more: a page arriving from that version joins the shared countdown or starts one.
   removeKey('session', LEGACY_STATE_KEY);
 
-  const stats = loadStats();
   const shared = readSchedule(nowMs);
-  if (shared === null) {
+  const join = shared !== null && (reloaded || hasOpenPage(id, nowMs));
+  markPageOpen(id, nowMs);
+
+  const stats = loadStats();
+  if (!join) {
     removeKey('local', SCHEDULE_KEY);
-    return { ...INITIAL_STATE, stats };
+    return { id, state: { ...INITIAL_STATE, stats } };
   }
-  return { ...shared, stats };
+  return { id, state: { ...shared, stats } };
 }
