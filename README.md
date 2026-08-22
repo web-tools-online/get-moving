@@ -42,12 +42,14 @@ and drives it: press **I'm walking** in one and the others restart with it, and 
 nudge sounds once however many are open. Whichever you happen to have in front of
 you is the one to use.
 
-Closing the last page stops the countdown, and opening the app again starts from
-scratch — press **Start** for a fresh interval. Closing one page of several changes
-nothing; the rest carry the clock on. A reload is not a close either: refresh
-mid-cycle and the countdown carries on where it was, so an accidental F5 costs
-nothing. The running schedule is the only thing that ends with the last page; your
-settings and the walk tally are kept between sessions.
+The countdown lasts as long as some page is open to keep it going, and about two
+minutes longer — every open page stamps the schedule as it ticks, and a page that
+opens picks it up while those stamps are still coming. So closing one page of
+several changes nothing, a reload keeps the countdown (an accidental F5 costs
+nothing), and closing the last one stops the clock: open the app a few minutes
+later and it is idle again, waiting for **Start**. The running schedule is the only
+thing that ends that way; your settings and the walk tally are kept between
+sessions.
 
 ### Settings
 
@@ -140,7 +142,7 @@ node test/browser-check.mjs        # screenshots land in test/screenshots/
 | --- | --- |
 | `index.html`, `styles.css` | The page. One stylesheet, no external fonts. |
 | `js/scheduler.js` | Pure scheduling logic. Start here. |
-| `js/settings.js` | Defaults, annoyance profiles, persistence. Everything goes to `localStorage`, the schedule included, so every open page shares one countdown. Each page registers itself there as it opens and strikes itself off as it goes, which is what makes the countdown end with the last page rather than outlive it; a page's own id lives in `sessionStorage`, so it can tell its reload from its close. |
+| `js/settings.js` | Defaults, annoyance profiles, persistence. Everything goes to `localStorage`, the schedule included, so every open page shares one countdown. Whether to pick that schedule up turns on one thing only — the heartbeat open pages stamp on it — since a page saying anything about itself ("I am open", "I am going away") is wrong in both directions once the browser starts backgrounding and freezing tabs. |
 | `js/app.js` | The tick loop, the state machine, and the UI bindings. |
 | `js/alarm.js` | WebAudio chimes and the anti-throttling keep-alive. |
 | `js/notify.js` | Notification permission and delivery. |
@@ -162,8 +164,11 @@ Some of this cannot be automated, and it is what actually matters day to day:
       one tab clears the takeover in the other.
 - [ ] Reload mid-nudge — the takeover comes straight back, and the escalation
       carries on from where it was instead of chiming again for the reload.
-- [ ] Close every tab mid-cycle and open the page again — it comes back idle, with
-      the day's walk tally intact, and **Start** begins a full fresh interval.
+- [ ] Leave the countdown in a background tab for a good while, then open the page
+      in a new tab — it must still show that countdown, not "Not running".
+- [ ] Close every tab mid-cycle, wait a couple of minutes, and open the page again —
+      it comes back idle, with the day's walk tally intact, and **Start** begins a
+      full fresh interval.
 - [ ] Walk on one day, skip the next, walk again — the history table shows the
       two days you walked and no row for the day in between.
 - [ ] Quit the browser mid-cycle and let it restore the session on relaunch — the
