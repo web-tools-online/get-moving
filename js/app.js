@@ -37,9 +37,7 @@ import {
   saveSettings,
   loadStats,
   saveStats,
-  openPage,
-  markPageOpen,
-  markPageClosed,
+  loadState,
   readSchedule,
   saveSchedule,
   normalizeSettings,
@@ -53,10 +51,10 @@ import * as attention from './attention.js';
 const TICK_MS = 1000;
 
 /**
- * How often a page re-stamps the stored schedule and its own entry in the register
- * of open pages. Both stamps are what mark a countdown as one somebody is actually
- * running, so they have to keep beating even through an hour of quiet waiting with
- * nothing else to write.
+ * How often a page re-stamps the stored schedule. The stamp is what marks the
+ * countdown as one somebody is running — it is what another page opening looks for
+ * — so it has to keep beating even through an hour of waiting with nothing else
+ * to write.
  */
 const HEARTBEAT_MS = 15_000;
 
@@ -64,9 +62,7 @@ let settings = loadSettings();
 
 // Opening the app joins the countdown any other open page is already running; only
 // when there is none does this page get a fresh, idle one of its own.
-const { id: pageId, state: openedWith } = openPage();
-let state = openedWith;
-let presenceAt = Date.now();
+let state = loadState();
 
 const el = (id) => document.getElementById(id);
 
@@ -97,16 +93,6 @@ function persist() {
   const now = Math.max(Date.now(), (state.heartbeatAt ?? 0) + 1);
   state.heartbeatAt = now;
   saveSchedule(state, now);
-}
-
-/**
- * Say we are still here. The schedule is only written while something is scheduled;
- * this beats whatever the phase, since an idle page is still a page that is open —
- * and is the difference between the next page joining it and starting over.
- */
-function announcePresence(now = Date.now()) {
-  presenceAt = now;
-  markPageOpen(pageId, now);
 }
 
 /* ------------------------------------------------- keeping the pages in step */
@@ -445,7 +431,6 @@ function tick() {
   // Keep the stored schedule stamped as live; without this an hour of quiet
   // waiting would look, to the next page load, exactly like a closed page.
   if (state.phase !== 'idle' && now - (state.heartbeatAt ?? 0) >= HEARTBEAT_MS) restamp();
-  if (now - presenceAt >= HEARTBEAT_MS) announcePresence(now);
 
   applyKeepAlive();
   render();
@@ -721,14 +706,10 @@ function bindEvents() {
     render();
   });
 
-  // Leaving the register is what makes closing this page different from reloading
-  // it: the countdown carries on only while some other page is still holding it.
-  window.addEventListener('pagehide', () => markPageClosed(pageId));
   window.addEventListener('pageshow', (event) => {
-    // Back out of the bfcache, where this page was frozen and struck off. It is
-    // open again, and whatever it remembers of the schedule may be minutes old.
+    // Back out of the bfcache, where this page was frozen: whatever it remembers of
+    // the schedule may be minutes old, and its own heartbeat has stopped meanwhile.
     if (!event.persisted) return;
-    announcePresence();
     syncStats();
     syncSchedule();
     tick();
@@ -789,7 +770,6 @@ if (document.readyState === 'loading') {
 
 // Exposed purely so the Playwright checks can drive the clock without waiting an hour.
 window.__getMoving = {
-  pageId,
   get state() {
     return state;
   },
