@@ -17,8 +17,11 @@ import {
   planPause,
   planResume,
   addWalk,
+  dayKey,
   statsForDay,
   recentDays,
+  walkedDays,
+  STATS_RETENTION_DAYS,
   formatDuration,
   formatApprox,
   isMissed,
@@ -61,6 +64,8 @@ function cacheElements() {
     'btn-start', 'btn-walking', 'btn-snooze', 'btn-pause', 'btn-reset',
     'permission-note', 'walk-banner', 'walk-remaining',
     'today-walks', 'today-minutes', 'day-strip',
+    'history-table', 'history-body', 'history-empty', 'history-retention',
+    'history-total-walks', 'history-total-minutes',
     'settings-form', 'annoyance-blurb', 'quiet-fields',
     'volume-readout', 'btn-test-sound', 'sound-test-hint',
     'overlay', 'overlay-walking', 'overlay-snooze', 'toast',
@@ -414,6 +419,7 @@ function render() {
   ui['today-walks'].textContent = String(today.walks);
   ui['today-minutes'].textContent = String(today.minutes);
   renderStrip(now);
+  renderHistory(now);
 }
 
 function renderStrip(now) {
@@ -433,6 +439,54 @@ function renderStrip(now) {
     column.append(bar, label);
     ui['day-strip'].append(column);
   }
+}
+
+/**
+ * The history table: one row per day that has a walk on it, newest first. Days
+ * off are absent rather than zeroed, so the table is empty until the first walk.
+ */
+function renderHistory(now) {
+  const days = walkedDays(state.stats, now);
+  const todayKey = dayKey(now);
+
+  ui['history-table'].hidden = days.length === 0;
+  ui['history-empty'].hidden = days.length > 0;
+
+  const body = ui['history-body'];
+  body.innerHTML = '';
+  let walks = 0;
+  let minutes = 0;
+
+  for (const day of days) {
+    walks += day.walks;
+    minutes += day.minutes;
+
+    const row = document.createElement('tr');
+    const label = document.createElement('th');
+    label.scope = 'row';
+    label.textContent = day.key === todayKey ? 'Today' : formatDayLabel(day.key);
+    // The raw date stays reachable for "Today", and for a weekday that could be
+    // any of the last two weeks.
+    label.title = day.key;
+
+    const walkCell = document.createElement('td');
+    walkCell.textContent = String(day.walks);
+    const minuteCell = document.createElement('td');
+    minuteCell.textContent = String(day.minutes);
+
+    row.append(label, walkCell, minuteCell);
+    body.append(row);
+  }
+
+  ui['history-total-walks'].textContent = String(walks);
+  ui['history-total-minutes'].textContent = String(minutes);
+}
+
+/** "Fri 21 Aug" — short enough for a narrow phone column. */
+function formatDayLabel(key) {
+  const date = new Date(`${key}T00:00`);
+  if (Number.isNaN(date.getTime())) return key;
+  return date.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
 function renderPermissionNote(result = notify.permission()) {
@@ -581,6 +635,7 @@ function init() {
   cacheElements();
   bindEvents();
   fillSettingsForm();
+  ui['history-retention'].textContent = String(STATS_RETENTION_DAYS);
   renderPermissionNote();
   notify.initServiceWorker();
 

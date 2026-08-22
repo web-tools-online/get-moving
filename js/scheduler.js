@@ -146,7 +146,7 @@ export function dayKey(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-const STATS_RETENTION_DAYS = 14;
+export const STATS_RETENTION_DAYS = 14;
 
 /** Record a walk, returning a new stats object pruned to the retention window. */
 export function addWalk(stats, ts, minutes) {
@@ -172,6 +172,26 @@ export function pruneStats(stats, ts) {
 
 export function statsForDay(stats, ts) {
   return stats[dayKey(ts)] ?? { walks: 0, minutes: 0 };
+}
+
+/**
+ * Every day that actually has a walk on it, newest first — the history table.
+ * Days off are left out entirely rather than shown as zeroes: a table of empty
+ * rows says nothing, and the log only reaches back `STATS_RETENTION_DAYS` anyway.
+ */
+export function walkedDays(stats, ts = Date.now()) {
+  const source = stats && typeof stats === 'object' ? stats : {};
+  const today = dayKey(ts);
+  return Object.entries(source)
+    .map(([key, value]) => ({
+      key,
+      walks: Number(value?.walks) || 0,
+      minutes: Number(value?.minutes) || 0,
+    }))
+    // A clock that was wrong (or wound forward) can leave a key in the future;
+    // it would sort to the top and read as tomorrow's walk, so it stays out.
+    .filter((day) => day.walks > 0 && day.key <= today)
+    .sort((a, b) => (a.key < b.key ? 1 : -1));
 }
 
 /** The last `days` days of stats, oldest first, for the little bar strip. */

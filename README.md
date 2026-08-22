@@ -14,6 +14,11 @@ the interval:
 11:00  nudge  ...
 ```
 
+Under the settings, **Days you walked** is a table of what you actually managed:
+one row per day with at least one walk, newest first, plus the running total.
+Days you did not walk are left out rather than shown as zeroes. The log keeps the
+last 14 days.
+
 No accounts, no server, no tracking. Everything lives in your browser's own
 storage.
 
@@ -146,6 +151,8 @@ Some of this cannot be automated, and it is what actually matters day to day:
 - [ ] Reload mid-cycle — the countdown carries on where it was.
 - [ ] Close the tab mid-cycle and open the page again — it comes back idle, with
       the day's walk tally intact, and **Start** begins a full fresh interval.
+- [ ] Walk on one day, skip the next, walk again — the history table shows the
+      two days you walked and no row for the day in between.
 - [ ] Quit the browser mid-cycle and let it restore the session on relaunch — the
       restored tab must start idle, not resume an hour-old countdown.
 - [ ] Pause, wait a while, resume — the countdown continues from where it was

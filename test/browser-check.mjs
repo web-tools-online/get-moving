@@ -257,6 +257,46 @@ async function main() {
     await page.screenshot({ path: join(shots, '04-walking.png'), fullPage: true });
   });
 
+  check('the history table lists the days that have a walk', async () => {
+    const rows = () =>
+      page.$$eval('#history-body tr', (all) =>
+        all.map((row) => [...row.children].map((cell) => cell.textContent.trim())),
+      );
+
+    assert.deepEqual(await rows(), [['Today', '1', '12']], 'today shows up as soon as it has a walk');
+    assert.equal(await page.isVisible('#history-table'), true);
+    assert.equal(await page.isVisible('#history-empty'), false);
+
+    // Backdate a walk two days out and leave yesterday empty: the gap must not
+    // become a row of zeroes.
+    const backdatedKey = await page.evaluate(() => {
+      const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000);
+      const pad = (n) => String(n).padStart(2, '0');
+      const key = `${twoDaysAgo.getFullYear()}-${pad(twoDaysAgo.getMonth() + 1)}-${pad(twoDaysAgo.getDate())}`;
+      window.__getMoving.state.stats[key] = { walks: 3, minutes: 36 };
+      window.__getMoving.tick();
+      return key;
+    });
+
+    const listed = await rows();
+    assert.equal(listed.length, 2, `a day without walks was listed: ${JSON.stringify(listed)}`);
+    assert.deepEqual(listed[0], ['Today', '1', '12'], 'newest first');
+    assert.deepEqual(listed[1].slice(1), ['3', '36']);
+    assert.deepEqual(
+      await page.$$eval('#history-total-walks, #history-total-minutes', (cells) => cells.map((c) => c.textContent.trim())),
+      ['4', '48'],
+      'the totals add up the listed days',
+    );
+    await page.screenshot({ path: join(shots, '05-history.png'), fullPage: true });
+
+    // The backdated day was only ever in memory; drop it again so the later
+    // checks compare the log this run actually earned.
+    await page.evaluate((key) => {
+      delete window.__getMoving.state.stats[key];
+      window.__getMoving.tick();
+    }, backdatedKey);
+  });
+
   check('a reload mid-cycle keeps the countdown', async () => {
     const before = await state();
     await page.reload({ waitUntil: 'load' });

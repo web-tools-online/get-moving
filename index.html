@@ -131,6 +131,29 @@
     </form>
   </section>
 
+  <section class="card card--history">
+    <h2 class="card__title">Days you walked</h2>
+    <p id="history-empty" class="history__empty" hidden>No walks logged yet. Press <strong>I'm walking</strong> when a nudge goes off and the day shows up here.</p>
+    <table id="history-table" class="history" hidden>
+      <caption class="history__caption">Only days with at least one walk. The log keeps the last <span id="history-retention">14</span> days.</caption>
+      <thead>
+        <tr>
+          <th scope="col">Day</th>
+          <th scope="col">Walks</th>
+          <th scope="col">Minutes</th>
+        </tr>
+      </thead>
+      <tbody id="history-body"></tbody>
+      <tfoot>
+        <tr>
+          <th scope="row">Total</th>
+          <td id="history-total-walks">0</td>
+          <td id="history-total-minutes">0</td>
+        </tr>
+      </tfoot>
+    </table>
+  </section>
+
   <footer class="page__foot">
     <p><strong>This tab has to stay open.</strong> GitHub Pages is a static host, so there is no server to push a notification from — the countdown lives in this page. Leave it in a background tab, or install it as an app so it gets its own window. Closing it stops the clock: a reload keeps the countdown, but the next time you open the page you start it again from scratch. Your settings and the walk tally are kept either way.</p>
   </footer>
