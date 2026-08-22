@@ -20,6 +20,7 @@ import {
   pruneStats,
   statsForDay,
   recentDays,
+  walkedDays,
   formatDuration,
   formatApprox,
 } from '../js/scheduler.js';
@@ -219,6 +220,29 @@ test('recentDays returns a padded, ordered strip', () => {
   assert.equal(strip.at(-1).key, dayKey(at(9)));
   assert.equal(strip.at(-1).minutes, 12);
   assert.equal(strip[0].minutes, 0);
+});
+
+test('the history lists only days that have a walk, newest first', () => {
+  let stats = addWalk({}, at(9, 0, 19), 12);
+  stats = addWalk(stats, at(17, 0, 19), 12);
+  // Nothing on the 20th — a day off must not appear at all.
+  stats = addWalk(stats, at(9, 0, 21), 15);
+
+  const history = walkedDays(stats, at(12, 0, 21));
+  assert.deepEqual(history.map((day) => day.key), [dayKey(at(9, 0, 21)), dayKey(at(9, 0, 19))]);
+  assert.deepEqual(history[0], { key: dayKey(at(9, 0, 21)), walks: 1, minutes: 15 });
+  assert.deepEqual(history[1], { key: dayKey(at(9, 0, 19)), walks: 2, minutes: 24 });
+});
+
+test('the history is empty before the first walk and ignores zeroed days', () => {
+  assert.deepEqual(walkedDays({}, at(9)), []);
+  assert.deepEqual(walkedDays(undefined, at(9)), []);
+  assert.deepEqual(walkedDays({ [dayKey(at(9))]: { walks: 0, minutes: 0 } }, at(9)), []);
+});
+
+test('the history leaves out a day stamped in the future', () => {
+  const stats = addWalk({}, at(9, 0, 22), 12);
+  assert.deepEqual(walkedDays(stats, at(9, 0, 21)), []);
 });
 
 test('durations format for the countdown and for prose', () => {

@@ -224,6 +224,54 @@ body[data-phase="due"] .progress__bar { background: var(--alarm); }
 
 .strip__label { font-size: .7rem; color: var(--ink-soft); }
 
+/* ------------------------------------------------------------------- history */
+
+.history {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Below the table, where it reads as a footnote rather than a heading. */
+.history__caption {
+  caption-side: bottom;
+  padding-top: .6rem;
+  color: var(--ink-soft);
+  font-size: .8rem;
+  text-align: left;
+}
+
+.history th,
+.history td {
+  padding: .45rem .5rem;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+}
+
+.history th[scope="row"],
+.history thead th:first-child {
+  text-align: left;
+  font-weight: 600;
+}
+
+.history thead th {
+  font-size: .8rem;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.history tbody tr:first-child th[scope="row"] { color: var(--walk); }
+
+.history tfoot th,
+.history tfoot td {
+  border-bottom: 0;
+  border-top: 2px solid var(--line);
+  font-weight: 600;
+}
+
+.history__empty { color: var(--ink-soft); margin: 0; }
+
 /* ------------------------------------------------------------------ settings */
 
 .settings { display: grid; gap: 1rem; }
