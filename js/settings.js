@@ -3,37 +3,26 @@
  * Every read is defensive — a corrupt or half-written value must never stop the
  * page from starting, since the whole point is that it keeps running unattended.
  *
- * Everything the app keeps lives in localStorage, including the running countdown:
- * open the app a second time and both pages are meant to be looking at the same
- * clock, not at two of them. What localStorage cannot say on its own is whether
- * anyone is still watching, and a countdown is supposed to stop when the last page
- * closes. So each open page registers itself under `PAGES_KEY` and strikes itself
- * off as it goes away, and each page's own id is kept in sessionStorage, which
- * survives its reloads and dies with it. A schedule is picked up only when another
- * page is open right now, or when this very page is coming back from a reload —
- * otherwise it is a countdown nobody is running, and the clock starts fresh.
+ * Two stores, deliberately: settings and the walk log are yours and belong in
+ * localStorage, but the running countdown belongs to the open page. It lives in
+ * sessionStorage, which survives a reload of the same tab and dies with it, so
+ * closing the page stops the clock instead of leaving one ticking in the dark.
  */
 
 import { clamp, hmToMinutes } from './scheduler.js';
 
 export const SETTINGS_KEY = 'get-moving:settings:v1';
-/** The running schedule — localStorage, shared by every page that has the app open. */
-export const SCHEDULE_KEY = 'get-moving:schedule:v1';
-/** Who is open right now: `{ [pageId]: heartbeatMs }`, in localStorage. */
-export const PAGES_KEY = 'get-moving:pages:v1';
-/** This page's own id — sessionStorage, so a reload comes back as the same page. */
-export const PAGE_ID_KEY = 'get-moving:page:v1';
-/** The walk log — localStorage, so it outlives the page it was earned in. */
+/** The running schedule — sessionStorage, i.e. one open tab's worth. */
+export const STATE_KEY = 'get-moving:state:v1';
+/** The walk log — localStorage, so it outlives the tab it was earned in. */
 export const STATS_KEY = 'get-moving:stats:v1';
-/** Pre-sharing key: a combined blob in localStorage, then a per-tab schedule in sessionStorage. */
-export const LEGACY_STATE_KEY = 'get-moving:state:v1';
 
 /**
- * How stale a heartbeat — a page's or the schedule's — may be before we stop
- * believing it. A hidden page still beats about once a minute (its timers get
+ * How stale the schedule's heartbeat may be before we treat it as someone else's.
+ * A tab that is merely hidden still beats about once a minute (its timers get
  * clamped), so the window has to clear that comfortably; anything beyond it means
- * nothing was actually open — a browser restore handing back the page id of a tab
- * that was closed hours ago, say — and the clock starts fresh.
+ * the page was not actually open — a browser restore handing back the
+ * sessionStorage of a tab that was closed hours ago, say — and the clock starts fresh.
  */
 export const STALE_STATE_MS = 2 * 60_000;
 
@@ -159,22 +148,6 @@ function removeKey(kind, key) {
   }
 }
 
-function readText(kind, key) {
-  try {
-    return store(kind)?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function writeText(kind, key, value) {
-  try {
-    store(kind)?.setItem(key, value);
-  } catch {
-    /* storage disabled — this page just cannot be recognised after a reload */
-  }
-}
-
 export function loadSettings() {
   return normalizeSettings(readJson('local', SETTINGS_KEY));
 }
@@ -194,8 +167,8 @@ export const INITIAL_STATE = {
   pausedWalkRemainingMs: null,
   snoozesUsed: 0,
   lastAlarmStep: -1,
-  // Stamped on every write: it dates the schedule, and it is what lets a page
-  // tell a countdown another page is still running from one nobody is.
+  // Stamped on every write, so a schedule handed back by a browser session
+  // restore can be told apart from one belonging to a page that never closed.
   heartbeatAt: null,
   stats: {},
 };
@@ -232,108 +205,36 @@ export function isStaleState(state, nowMs = Date.now()) {
  * The walk log, with a one-off lift out of the old combined state blob so the
  * counts of anyone who used the app before the split are not thrown away.
  */
-export function loadStats() {
+function loadStats() {
   const stored = readJson('local', STATS_KEY);
   if (stored && typeof stored === 'object') return stored;
 
-  const legacy = readJson('local', LEGACY_STATE_KEY);
+  const legacy = readJson('local', STATE_KEY);
   // The rest of that blob is a schedule from a page that is long closed; dropping
   // the key is the point, so it can never be resurrected as a running countdown.
-  removeKey('local', LEGACY_STATE_KEY);
+  removeKey('local', STATE_KEY);
   const stats = legacy?.stats && typeof legacy.stats === 'object' ? legacy.stats : {};
   writeJson('local', STATS_KEY, stats);
   return stats;
 }
 
-export function saveStats(stats) {
-  writeJson('local', STATS_KEY, stats ?? {});
-}
-
-/* ------------------------------------------------------- who has the app open */
-
-function newPageId() {
-  try {
-    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  } catch {
-    /* fall through to the cheap one */
-  }
-  return `p${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-/** The open pages, minus any whose heartbeat has gone quiet for too long. */
-function readPages(nowMs) {
-  const raw = readJson('local', PAGES_KEY);
-  const pages = {};
-  if (raw && typeof raw === 'object') {
-    for (const [id, beat] of Object.entries(raw)) {
-      const at = Number(beat);
-      if (Number.isFinite(at) && nowMs - at <= STALE_STATE_MS) pages[id] = at;
-    }
-  }
-  return pages;
-}
-
-/** True when some page other than this one has the app open right now. */
-export function hasOpenPage(exceptId, nowMs = Date.now()) {
-  return Object.keys(readPages(nowMs)).some((id) => id !== exceptId);
-}
-
-/** Register this page as open. Also the heartbeat — it is the same write. */
-export function markPageOpen(id, nowMs = Date.now()) {
-  writeJson('local', PAGES_KEY, { ...readPages(nowMs), [id]: nowMs });
-}
-
 /**
- * Strike this page off, which is what tells a close from a reload: both drop the
- * page out of the register, but only a reload brings back the id in sessionStorage.
+ * Rebuild the state a page starts with: the walk log always, and the schedule only
+ * if this very tab left one behind recently. A tab that was closed — or a schedule
+ * a browser restore is trying to hand back — starts over from idle.
  */
-export function markPageClosed(id, nowMs = Date.now()) {
-  const pages = readPages(nowMs);
-  delete pages[id];
-  writeJson('local', PAGES_KEY, pages);
-}
-
-/* -------------------------------------------------------------- the schedule */
-
-/** The shared schedule as it stands in storage, or null when there is none worth having. */
-export function readSchedule(nowMs = Date.now()) {
-  const stored = readJson('local', SCHEDULE_KEY);
-  if (!stored) return null;
-  const schedule = normalizeState(stored);
-  return isStaleState(schedule, nowMs) ? null : schedule;
-}
-
-export function saveSchedule(state, nowMs = Date.now()) {
-  const { stats, ...schedule } = state;
-  writeJson('local', SCHEDULE_KEY, { ...schedule, heartbeatAt: nowMs });
-}
-
-/**
- * Opening the app: take an id, join the countdown if there is a live one to join,
- * and register as open.
- *
- * "Live" means a page other than this one is open right now, or this is the same
- * page coming back from a reload. A schedule with neither behind it belonged to
- * pages that are all gone — or is one a browser session restore is trying to hand
- * back — and it is dropped rather than resumed.
- */
-export function openPage(nowMs = Date.now()) {
-  const previousId = readText('session', PAGE_ID_KEY);
-  const reloaded = typeof previousId === 'string' && previousId.length > 0;
-  const id = reloaded ? previousId : newPageId();
-  writeText('session', PAGE_ID_KEY, id);
-  // The per-tab schedule the version before this one kept here. Nothing reads it any
-  // more: a page arriving from that version joins the shared countdown or starts one.
-  removeKey('session', LEGACY_STATE_KEY);
-
-  const shared = readSchedule(nowMs);
-  const join = shared !== null && (reloaded || hasOpenPage(id, nowMs));
-  markPageOpen(id, nowMs);
-
+export function loadState() {
   const stats = loadStats();
-  if (!join) {
-    removeKey('local', SCHEDULE_KEY);
-    return { id, state: { ...INITIAL_STATE, stats } };
+  const stored = normalizeState(readJson('session', STATE_KEY));
+  if (isStaleState(stored)) {
+    removeKey('session', STATE_KEY);
+    return { ...INITIAL_STATE, stats };
   }
-  return { id, state: { ...shared, stats } };
+  return { ...stored, stats };
+}
+
+export function saveState(state, nowMs = Date.now()) {
+  const { stats, ...schedule } = state;
+  writeJson('session', STATE_KEY, { ...schedule, heartbeatAt: nowMs });
+  writeJson('local', STATS_KEY, stats ?? {});
 }
