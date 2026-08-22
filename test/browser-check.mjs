@@ -106,26 +106,9 @@ async function main() {
       window.__getMoving.tick();
     });
 
-  const stateOf = (target) => target.evaluate(() => JSON.parse(JSON.stringify(window.__getMoving.state)));
-  const state = () => stateOf(page);
-
+  const state = () => page.evaluate(() => JSON.parse(JSON.stringify(window.__getMoving.state)));
   const notifications = () => page.evaluate(() => window.__notifications);
   const oscillators = () => page.evaluate(() => window.__oscillators);
-
-  /** A separate browser profile, so a check can close every page without ending this run. */
-  const freshContext = async () => {
-    const isolated = await browser.newContext();
-    await isolated.grantPermissions(['notifications'], { origin: ORIGIN });
-    await isolated.addInitScript(NOTIFICATION_SPY);
-    await isolated.addInitScript(AUDIO_SPY);
-    return isolated;
-  };
-
-  const openApp = async (target) => {
-    const opened = await target.newPage();
-    await opened.goto(ORIGIN, { waitUntil: 'load' });
-    return opened;
-  };
 
   /** Range inputs cannot be filled, so nudge the slider the way a drag would. */
   const setVolume = (value) =>
@@ -229,7 +212,9 @@ async function main() {
     // minute once it has been hidden for five. That cannot be reproduced from
     // here, so the clamp is applied by hand: if the title still moves, its beat
     // is coming from somewhere the throttling does not reach.
-    const throttled = await freshContext();
+    const throttled = await browser.newContext();
+    await throttled.grantPermissions(['notifications'], { origin: ORIGIN });
+    await throttled.addInitScript(NOTIFICATION_SPY);
     await throttled.addInitScript(`
       const real = window.setInterval.bind(window);
       window.setInterval = (fn, ms, ...rest) => real(fn, Math.max(Number(ms) || 0, 60000), ...rest);
@@ -321,127 +306,32 @@ async function main() {
     assert.deepEqual(after.stats, before.stats, 'the stats survived the reload');
   });
 
-  check('opening the app a second time joins the countdown already running', async () => {
+  check('closing the page ends the countdown; opening it again starts over', async () => {
     const before = await state();
-    assert.equal(before.phase, 'waiting', 'precondition: a countdown is running in the first page');
+    assert.equal(before.phase, 'waiting', 'precondition: a countdown is running in this tab');
 
-    const second = await openApp(context);
-    const joined = await stateOf(second);
-    assert.equal(joined.phase, 'waiting', 'the second page started a countdown of its own');
-    assert.equal(joined.nextDueAt, before.nextDueAt, 'both pages are on the same clock');
-    assert.equal(await second.getAttribute('body', 'data-phase'), 'waiting');
-    assert.deepEqual(joined.stats, before.stats, 'and on the same walk log');
-    assert.notEqual(
-      await second.evaluate(() => window.__getMoving.pageId),
-      await page.evaluate(() => window.__getMoving.pageId),
-      'a second page, not the first one over again',
-    );
-
-    // Whichever page it is driven from, it is one countdown: pausing in the new
-    // page holds the clock in the old one too.
-    await second.click('#btn-pause');
-    await page.waitForFunction(() => document.body.dataset.phase === 'paused', null, { polling: 100 });
-    await second.click('#btn-pause');
-    await page.waitForFunction(() => document.body.dataset.phase === 'waiting', null, { polling: 100 });
-    assert.equal((await state()).nextDueAt, (await stateOf(second)).nextDueAt, 'the resumed clock is shared too');
-
-    await second.close();
-    await page.bringToFront();
-    await page.waitForFunction(() => window.__getMoving.state.phase === 'waiting', null, { polling: 100 });
-    assert.equal((await state()).phase, 'waiting', 'the page left open keeps the countdown');
-  });
-
-  check('a nudge fires once however many pages are open, and is answered in all of them', async () => {
-    const isolated = await freshContext();
-    const first = await openApp(isolated);
-    const second = await openApp(isolated);
-    await first.click('#btn-start');
-    await second.waitForFunction(() => window.__getMoving.state.phase === 'waiting', null, { polling: 100 });
-
-    // Only the first page's clock is wound forward; the second one has to hear
-    // about the nudge from the schedule they share.
-    await first.evaluate(() => {
-      window.__getMoving.state.nextDueAt = Date.now() - 1000;
-      window.__getMoving.tick();
-    });
-    await second.waitForFunction(() => window.__getMoving.state.phase === 'due', null, { polling: 100 });
-    await second.waitForFunction(() => document.title.includes('GET UP'), null, { polling: 100 });
-
-    assert.equal(
-      (await second.evaluate(() => window.__notifications)).length,
-      0,
-      'the second page raised a nudge of its own — one alarm per page instead of one alarm',
-    );
-    assert.equal((await first.evaluate(() => window.__notifications)).length, 1);
-
-    // Getting up is getting up, whichever page it is said in.
-    await second.click('#overlay-walking');
-    await first.waitForFunction(() => window.__getMoving.state.phase === 'waiting', null, { polling: 100 });
-    await first.waitForFunction(() => document.title === 'Get Moving', null, { polling: 100 });
-    assert.equal((await stateOf(first)).nextDueAt, (await stateOf(second)).nextDueAt);
-    assert.equal(
-      await first.textContent('#today-walks'),
-      '1',
-      'the walk was logged once, and both pages show it',
-    );
-    await isolated.close();
-  });
-
-  check('a reload during a nudge comes back nagging, without sounding it again', async () => {
-    const isolated = await freshContext();
-    const only = await openApp(isolated);
-    await only.click('#btn-start');
-    await only.evaluate(() => {
-      window.__getMoving.state.nextDueAt = Date.now() - 1000;
-      window.__getMoving.tick();
-    });
-    await only.waitForSelector('#overlay:not([hidden])');
-    assert.equal((await only.evaluate(() => window.__notifications)).length, 1);
-
-    await only.reload({ waitUntil: 'load' });
-    assert.equal((await stateOf(only)).phase, 'due', 'the nudge did not survive the reload');
-    await only.waitForSelector('#overlay:not([hidden])');
-    await only.waitForFunction(() => document.title.includes('GET UP'), null, { polling: 100 });
-    // The spy is reset by the reload, so anything here was raised by the new page.
-    assert.equal(
-      (await only.evaluate(() => window.__notifications)).length,
-      0,
-      'reloading sounded the nudge over again instead of picking it up where it was',
-    );
-    await isolated.close();
-  });
-
-  check('closing every page ends the countdown; opening it again starts over', async () => {
-    // Its own browser profile: this check closes all of the app's pages, which is
-    // exactly what the main run must not do to itself.
-    const isolated = await freshContext();
-    const first = await openApp(isolated);
-    await first.click('#btn-start');
-    const started = await stateOf(first);
-    assert.equal(started.phase, 'waiting');
-
-    const second = await openApp(isolated);
-    assert.equal((await stateOf(second)).nextDueAt, started.nextDueAt, 'precondition: two pages, one countdown');
-
-    await second.close();
-    await first.close();
-
-    const later = await openApp(isolated);
-    const fresh = await stateOf(later);
-    assert.equal(fresh.phase, 'idle', 'the new page picked up a countdown nobody was running');
+    // A second page is a second tab, which is what reopening the app amounts to:
+    // the schedule was tied to the page that is gone.
+    const reopened = await context.newPage();
+    await reopened.goto(ORIGIN, { waitUntil: 'load' });
+    const fresh = await reopened.evaluate(() => JSON.parse(JSON.stringify(window.__getMoving.state)));
+    assert.equal(fresh.phase, 'idle', 'the new page picked up a countdown it should not have');
     assert.equal(fresh.nextDueAt, null);
-    assert.equal(await later.getAttribute('body', 'data-phase'), 'idle');
-    await isolated.close();
+    assert.equal(await reopened.getAttribute('body', 'data-phase'), 'idle');
+    assert.deepEqual(fresh.stats, before.stats, 'the walk log is not tab-scoped and must survive');
+    await reopened.close();
+
+    assert.equal((await state()).nextDueAt, before.nextDueAt, 'the original tab kept its own clock');
   });
 
   check('a restored session does not resurrect an old countdown', async () => {
-    const isolated = await freshContext();
-    const restored = await openApp(isolated);
-    // What a browser hands back when it reopens the tabs from last time: this
-    // page's own id, and a schedule that stopped being run hours ago.
+    const restored = await context.newPage();
+    await restored.goto(ORIGIN, { waitUntil: 'load' });
+    // What a browser hands back when it reopens the tabs from last time: the
+    // sessionStorage of a page that stopped running hours ago.
     await restored.evaluate(() => {
-      localStorage.setItem(
-        'get-moving:schedule:v1',
+      sessionStorage.setItem(
+        'get-moving:state:v1',
         JSON.stringify({
           phase: 'waiting',
           nextDueAt: Date.now() + 30 * 60_000,
@@ -455,7 +345,7 @@ async function main() {
       'idle',
       'an hour-old schedule was resumed instead of being dropped',
     );
-    await isolated.close();
+    await restored.close();
   });
 
   check('pause holds the countdown and resume continues it', async () => {
