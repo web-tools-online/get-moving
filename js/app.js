@@ -30,10 +30,18 @@ import {
 
 import {
   INITIAL_STATE,
+  SCHEDULE_KEY,
+  SETTINGS_KEY,
+  STATS_KEY,
   loadSettings,
   saveSettings,
-  loadState,
-  saveState,
+  loadStats,
+  saveStats,
+  openPage,
+  markPageOpen,
+  markPageClosed,
+  readSchedule,
+  saveSchedule,
   normalizeSettings,
   profileFor,
 } from './settings.js';
@@ -45,14 +53,20 @@ import * as attention from './attention.js';
 const TICK_MS = 1000;
 
 /**
- * How often a running page re-stamps the stored schedule. The stamp is what marks
- * the countdown as belonging to a page that is genuinely open, so it has to keep
- * beating even through an hour of waiting with nothing else to write.
+ * How often a page re-stamps the stored schedule and its own entry in the register
+ * of open pages. Both stamps are what mark a countdown as one somebody is actually
+ * running, so they have to keep beating even through an hour of quiet waiting with
+ * nothing else to write.
  */
 const HEARTBEAT_MS = 15_000;
 
 let settings = loadSettings();
-let state = loadState();
+
+// Opening the app joins the countdown any other open page is already running; only
+// when there is none does this page get a fresh, idle one of its own.
+const { id: pageId, state: openedWith } = openPage();
+let state = openedWith;
+let presenceAt = Date.now();
 
 const el = (id) => document.getElementById(id);
 
@@ -78,9 +92,88 @@ function cacheElements() {
 /* ------------------------------------------------------------------ helpers */
 
 function persist() {
-  const now = Date.now();
+  // Never the same stamp twice: two writes inside one tick still have to come out in
+  // order, since the stamp is how another page tells which schedule is the newer one.
+  const now = Math.max(Date.now(), (state.heartbeatAt ?? 0) + 1);
   state.heartbeatAt = now;
-  saveState(state, now);
+  saveSchedule(state, now);
+}
+
+/**
+ * Say we are still here. The schedule is only written while something is scheduled;
+ * this beats whatever the phase, since an idle page is still a page that is open —
+ * and is the difference between the next page joining it and starting over.
+ */
+function announcePresence(now = Date.now()) {
+  presenceAt = now;
+  markPageOpen(pageId, now);
+}
+
+/* ------------------------------------------------- keeping the pages in step */
+
+/**
+ * Take on a schedule another page wrote. Every open page runs the same countdown,
+ * so the last write wins and the others follow it rather than each keeping — and
+ * re-saving — a copy of their own.
+ */
+function adoptSchedule(shared) {
+  const wasDue = state.phase === 'due';
+  state = { ...shared, stats: state.stats };
+  if (wasDue && state.phase !== 'due') {
+    // Someone acknowledged, snoozed or reset it in another page; stop nagging here too.
+    stopNagging();
+    notify.clearNudges();
+  }
+  applyKeepAlive();
+  render();
+}
+
+/** Follow the shared schedule when another page has written a newer one. */
+function syncSchedule() {
+  const shared = readSchedule();
+  // Ours is the newest write when it was this page that made it — nothing to adopt.
+  if (!shared || (shared.heartbeatAt ?? 0) <= (state.heartbeatAt ?? 0)) return false;
+  adoptSchedule(shared);
+  return true;
+}
+
+/**
+ * Sounding something — the alarm for an escalation step, the cue at the end of a
+ * walk — is a claim staked on the shared schedule: mark it there first, then sound
+ * it. A page that finds another has already made the mark follows that schedule and
+ * keeps quiet, so what is heard is one nudge and not one per page that is open.
+ */
+function claim(alreadyMade, mark) {
+  const shared = readSchedule();
+  // The mark itself is the evidence: this page has not made it, so a stored schedule
+  // carrying it is another page's, and a newer one than this page is holding.
+  if (shared && alreadyMade(shared)) {
+    adoptSchedule(shared);
+    return false;
+  }
+  mark();
+  persist();
+  return true;
+}
+
+/**
+ * The periodic re-stamp. It reads before it writes, so a page whose copy has fallen
+ * behind — one that missed a storage event while it was frozen, say — follows the
+ * schedule instead of stamping its own stale one over it.
+ */
+function restamp() {
+  if (!syncSchedule()) persist();
+}
+
+/** The walk log is shared too — a walk logged in one page counts in all of them. */
+function syncStats() {
+  state.stats = loadStats();
+}
+
+function syncSettings() {
+  settings = loadSettings();
+  fillSettingsForm();
+  applyKeepAlive();
 }
 
 function profile() {
@@ -137,7 +230,9 @@ function becomeDue(now) {
 function acknowledgeWalk() {
   const now = Date.now();
   const walkEndsAt = now + settings.walkMinutes * MINUTE;
-  state.stats = addWalk(state.stats, now, settings.walkMinutes);
+  // Counted onto the log as it stands in storage, not onto this page's copy of it,
+  // so a walk logged in another page a moment ago cannot be overwritten here.
+  state.stats = addWalk(loadStats(), now, settings.walkMinutes);
   state.phase = 'waiting';
   // One full interval, as agreed — except when the walk is configured longer than
   // the interval itself, where the nudge would otherwise go off mid-walk.
@@ -147,6 +242,7 @@ function acknowledgeWalk() {
   state.snoozesUsed = 0;
   state.lastAlarmStep = -1;
   persist();
+  saveStats(state.stats);
 
   stopNagging();
   notify.clearNudges();
@@ -311,9 +407,13 @@ function tick() {
   const now = Date.now();
 
   if (state.walkEndsAt && now >= state.walkEndsAt) {
-    state.walkEndsAt = null;
-    persist();
-    if (settings.sitNudgeEnabled) {
+    const cue = claim(
+      (shared) => shared.walkEndsAt === null,
+      () => {
+        state.walkEndsAt = null;
+      },
+    );
+    if (cue && settings.sitNudgeEnabled) {
       alarm.playSitCue(settings.volume);
       notify.showNudge({
         title: 'You can sit down now',
@@ -330,17 +430,22 @@ function tick() {
 
   if (state.phase === 'due') {
     const step = escalationStep(state.dueSince, now, profile());
-    if (step > state.lastAlarmStep) {
-      state.lastAlarmStep = step;
-      persist();
-      fireAlarm(step);
-    }
+    const mine =
+      step > state.lastAlarmStep &&
+      claim(
+        (shared) => shared.lastAlarmStep >= step,
+        () => {
+          state.lastAlarmStep = step;
+        },
+      );
+    if (mine) fireAlarm(step);
     nagVisuals();
   }
 
   // Keep the stored schedule stamped as live; without this an hour of quiet
-  // waiting would look, to the next page load, exactly like a closed tab.
-  if (state.phase !== 'idle' && now - (state.heartbeatAt ?? 0) >= HEARTBEAT_MS) persist();
+  // waiting would look, to the next page load, exactly like a closed page.
+  if (state.phase !== 'idle' && now - (state.heartbeatAt ?? 0) >= HEARTBEAT_MS) restamp();
+  if (now - presenceAt >= HEARTBEAT_MS) announcePresence(now);
 
   applyKeepAlive();
   render();
@@ -604,10 +709,38 @@ function bindEvents() {
     if (event.target.name === 'volume') onSettingsChanged();
   });
 
+  // Every other open page writes the schedule it is running to the same place, so
+  // a change there is a change here — this is what keeps two open pages on one clock.
+  window.addEventListener('storage', ({ key }) => {
+    // `null` is a wholesale clear. Anything else of ours — a page announcing itself
+    // in the register, say — changes nothing here.
+    if (key !== null && key !== SCHEDULE_KEY && key !== STATS_KEY && key !== SETTINGS_KEY) return;
+    if (key === null || key === STATS_KEY) syncStats();
+    if (key === null || key === SETTINGS_KEY) syncSettings();
+    if (key === null || key === SCHEDULE_KEY) syncSchedule();
+    render();
+  });
+
+  // Leaving the register is what makes closing this page different from reloading
+  // it: the countdown carries on only while some other page is still holding it.
+  window.addEventListener('pagehide', () => markPageClosed(pageId));
+  window.addEventListener('pageshow', (event) => {
+    // Back out of the bfcache, where this page was frozen and struck off. It is
+    // open again, and whatever it remembers of the schedule may be minutes old.
+    if (!event.persisted) return;
+    announcePresence();
+    syncStats();
+    syncSchedule();
+    tick();
+  });
+
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       // Coming back to a throttled tab: catch up immediately instead of waiting
-      // for the next scheduled tick.
+      // for the next scheduled tick. A frozen tab can have missed storage events
+      // while it was away, so the shared schedule is re-read rather than assumed.
+      syncStats();
+      syncSchedule();
       tick();
       // Re-unlocking is free when already running, and recovers a context that
       // the browser suspended while the tab was hidden.
@@ -639,12 +772,11 @@ function init() {
   renderPermissionNote();
   notify.initServiceWorker();
 
-  // A reload mid-cycle must not lose the schedule (it is kept per tab, and only
-  // a closed tab drops it), but audio cannot restart without a gesture — the next
-  // click or the overlay button restores it.
-  if (state.phase === 'due') state.lastAlarmStep = -1;
-
   render();
+  // Opening into an unacknowledged nudge — a reload, or a second page opened while
+  // the first is nagging — puts the takeover back up on this first tick. The nudge
+  // is taken as it stands, escalation and all: a page opening is not worth a chime
+  // of its own, and the next step will sound in whichever page gets to it first.
   tick();
   setInterval(tick, TICK_MS);
 }
@@ -657,6 +789,7 @@ if (document.readyState === 'loading') {
 
 // Exposed purely so the Playwright checks can drive the clock without waiting an hour.
 window.__getMoving = {
+  pageId,
   get state() {
     return state;
   },
